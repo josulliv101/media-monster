@@ -278,6 +278,36 @@ function owningCollectionChildIds(document: TimelineDocument): string[] {
   return owned;
 }
 
+/**
+ * EVERY collection child this document points at, owning or not.
+ *
+ * The orphan guard's question is "did anything take up what this batch put
+ * down". An OWNING placement is the strong answer, but a document that keeps a
+ * non-owning reference card still POINTS AT the child — it has not dropped it,
+ * it has re-spelt it, and the real owner is a document this batch never touched.
+ *
+ * That distinction is the whole of #648. The trash legitimately holds a
+ * collection twice: once as a direct child, once nested under the parent it was
+ * trashed with. Deep hydration reaches the nested copy first, so the direct one
+ * demotes to a reference card, and `graphChildrenToClips` writes it back with
+ * `id !== childTimelineId` DELIBERATELY (spelling it as owning is exactly what
+ * the duplicate-owner guard refuses). The owning claim vanished, "released and
+ * unclaimed" fired, and every agent delete was refused — naming twenty
+ * collections that had nothing to do with the clip being removed.
+ *
+ * Reading references here does NOT weaken the guard against the shape it was
+ * built for: half a change, the source write arriving alone. That write drops
+ * the clip outright, leaving no reference of any kind, and is still refused.
+ */
+function referencedCollectionChildIds(document: TimelineDocument): string[] {
+  const referenced: string[] = [];
+  for (const clip of document.clips) {
+    if (clip.kind !== "collection") continue;
+    referenced.push(clip.childTimelineId);
+  }
+  return referenced;
+}
+
 function normalizeDocument(document: TimelineDocument): TimelineDocument {
   return JSON.parse(JSON.stringify(document)) as TimelineDocument;
 }
@@ -1040,8 +1070,12 @@ export async function saveFirebaseTimelineEntry(
 
       if (existingDocument) {
         const claimed = new Set(ownedHere);
+        // A child still POINTED AT by the new version is not stranded, even
+        // where the pointer demoted from owning to a reference card — see
+        // `referencedCollectionChildIds` and #648.
+        const stillReferenced = new Set(referencedCollectionChildIds(normalizedDocument));
         const released = owningCollectionChildIds(existingDocument).filter(
-          (childId) => !claimed.has(childId),
+          (childId) => !claimed.has(childId) && !stillReferenced.has(childId),
         );
         if (released.length > 0) {
           // Reads, so they must happen before the `tx.set` below. Normally
@@ -1159,6 +1193,10 @@ export async function saveFirebaseTimelineDocumentsAtomic(
       // sides of every document, so the guard costs no extra reads here.
       const releasedChildren = new Map<string, string>();
       const claimedChildren = new Set<string>();
+      /** Children any written document still POINTS AT, owning or not. A
+       *  demoted duplicate keeps the pointer while losing the owning spelling,
+       *  which is not a stranding — see `referencedCollectionChildIds`. */
+      const referencedChildren = new Set<string>();
       /** Every owning claim, keyed by child — the duplicate-owner guard's
        *  input. Separate from `claimedChildren` because that one must stay a
        *  Set: the orphan guard asks "did anything take this up", where a
@@ -1199,6 +1237,9 @@ export async function saveFirebaseTimelineDocumentsAtomic(
         // owning placement is untouched, so counting them here would refuse a
         // legitimate edit. Multi-parent is legal in this model; that asymmetry
         // is what makes it safe to reason about from inside one batch.
+        for (const childId of referencedCollectionChildIds(normalizedDocument)) {
+          referencedChildren.add(childId);
+        }
         for (const childId of owningCollectionChildIds(normalizedDocument)) {
           claimedChildren.add(childId);
           // The DUPLICATE-OWNER half of the invariant. `claimedChildren` is a
@@ -1281,7 +1322,9 @@ export async function saveFirebaseTimelineDocumentsAtomic(
       // trash bin, which is itself one of the written documents. What fails is
       // half a change: the source write arriving alone, which is precisely the
       // shape the client's own error paths used to manufacture.
-      const orphaned = [...releasedChildren.keys()].filter((id) => !claimedChildren.has(id));
+      const orphaned = [...releasedChildren.keys()].filter(
+        (id) => !claimedChildren.has(id) && !referencedChildren.has(id),
+      );
       if (orphaned.length > 0) {
         // Reads, and they must all happen before the first `tx.set` below.
         // Bounded by the batch size, and normally zero — a batch that removes
