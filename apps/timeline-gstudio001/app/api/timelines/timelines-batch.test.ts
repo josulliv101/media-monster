@@ -501,6 +501,41 @@ describe("timeline batch writes", () => {
     expect(at((state.docs.get("parent-2")?.clips as TimelineClip[]), 0).id).toBe("child-1");
   });
 
+  // A DEMOTED DUPLICATE IS NOT A STRANDING. Regression for #648.
+  //
+  // The trash legitimately holds a collection twice: once as a direct child and
+  // once nested under the parent it was trashed with. Deep hydration
+  // (`HYDRATE_ALL_LEVELS`, the agent path) reaches the nested copy first, so the
+  // direct one demotes to a reference card and `graphChildrenToClips` writes it
+  // back with `id !== childTimelineId` ON PURPOSE — spelling it as owning is what
+  // the duplicate-owner guard exists to refuse.
+  //
+  // That demotion dropped the OWNING claim, so "released and unclaimed" fired and
+  // every agent delete was refused, naming twenty collections unrelated to the
+  // clip being removed. The document still POINTS AT the child, so nothing was
+  // stranded — the write is a re-spelling, not a removal.
+  it("ALLOWS a write that keeps the child as a non-owning reference card", async () => {
+    seedParentWithChild("parent-1", "child-1");
+
+    const response = await batchWrite(
+      batchRequest([
+        {
+          document: {
+            id: "parent-1",
+            title: "Timeline parent-1",
+            clips: [collectionClip("child-1", "duplicate-card-1")],
+          },
+          expectedRevision: 1,
+        },
+      ]),
+    );
+
+    expect(response.status).toBe(200);
+    const clips = state.docs.get("parent-1")?.clips as TimelineClip[];
+    expect(at(clips, 0).id).toBe("duplicate-card-1");
+    expect((at(clips, 0) as { childTimelineId: string }).childTimelineId).toBe("child-1");
+  });
+
   it("ALLOWS a delete: the trash is the document taking it up", async () => {
     seedParentWithChild("parent-1", "child-1");
     state.docs.set("trash-user-a", {
