@@ -33,6 +33,29 @@ const nextConfig: NextConfig = {
    * with the shell, like the `distDir` split below.
    */
   devIndicators: false,
+  /**
+   * THE ENGINE IS COMPILED FROM SOURCE, NOT CONSUMED AS A BUILT PACKAGE.
+   *
+   * `@josulliv101/nested-collections` is the one package here built to be
+   * published: it has an `exports` map pointing at `dist`, `files: ["dist"]` and
+   * a `publishConfig`. Resolving through that map would make this app a consumer
+   * of a build artifact, and the artifact is gitignored — so a fresh clone has
+   * no `dist` at all, and a stale one is worse than none. Measured on this
+   * machine before wiring it up: `dist` was three weeks behind its source, seven
+   * commits including the fix for a cyclic seed hanging the depth precheck.
+   *
+   * The app therefore maps the package to its TypeScript entry points in
+   * `tsconfig.json` and lists it here so Next compiles them. That is what every
+   * other workspace package in this repo already does — the `@storyboard/*` ones
+   * point `main` at `index.ts` and appear in `timeline-gstudio001`'s own list.
+   *
+   * WHAT THIS GIVES UP, so nobody has to rediscover it: the app no longer
+   * exercises the published artifact, so a packaging break — a wrong `exports`
+   * path, a missing `"use client"`, a file left out of `files` — cannot show up
+   * here. That belongs in a build-and-import check on the package itself, not in
+   * making every developer build before the app will start.
+   */
+  transpilePackages: ["@josulliv101/nested-collections"],
   reactStrictMode: true,
   /**
    * DEV AND BUILD GET SEPARATE DIRECTORIES.
