@@ -1,0 +1,238 @@
+"use client";
+
+import { useState } from "react";
+import { parseNodeId } from "@josulliv101/nested-collections";
+import { Redo2, Undo2 } from "lucide-react";
+
+import {
+  NodeSlot,
+  Provider,
+  defineNodeView,
+  useChildren,
+  useDispatch,
+  useFold,
+  useHistory,
+  useIsSelected,
+  useSelectionActions,
+} from "@/lib/engine/bindings";
+import { engine } from "@/lib/engine/engine";
+import { loadFixtureGraph } from "@/lib/engine/fixture-document";
+import { cn } from "@/lib/utils";
+
+/**
+ * The board: the engine, rendering.
+ *
+ * FIRST HOST FOR `@josulliv101/nested-collections`. Until now the package had
+ * exactly one consumer in the repo and it was Storybook. This is the app
+ * actually holding a document, folding it, and mutating it through the one
+ * command path.
+ *
+ * WHAT IT DELIBERATELY IS NOT, so the gap is a decision rather than an oversight:
+ * there is no drag and drop, no persistence and no routing. The document is a
+ * fixture and every change is lost on reload. Those are the next three pieces
+ * and each is larger than this one; what this proves is that the engine runs
+ * here, with this app's own kinds, and that its uncertainty machinery survives
+ * the trip to the screen.
+ *
+ * BOTH VIEWS ARE REGISTERED IN THIS FILE, at module scope, and that is not
+ * laziness. `defineNodeView` mutates a registry and returns nothing, so
+ * registration is a side effect with an ordering requirement: a kind registered
+ * after its first render logs an error and renders nothing until the next one.
+ * Keeping the registrations in the same module as the component that mounts the
+ * provider is what makes "registered before anything renders" true by
+ * construction rather than by import order.
+ */
+
+/** How the app writes a duration. Seconds under a minute, m:ss above. */
+function formatSeconds(total: number): string {
+  if (total < 60) {
+    // One decimal only when there is one — "4.5s" is information, "8.0s" is
+    // noise pretending to be precision.
+    return `${Number.isInteger(total) ? total : total.toFixed(1)}s`;
+  }
+  const minutes = Math.floor(total / 60);
+  const seconds = Math.round(total % 60);
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+/**
+ * A duration, and how much of it is actually known.
+ *
+ * THE CERTAINTY IS RENDERED, not swallowed, and this component exists so that it
+ * cannot quietly stop being. A fold over a subtree with an unread branch comes
+ * back `"estimated"`; printing its number bare would be the exact failure the
+ * engine's four-state children design exists to prevent — a total that looks
+ * measured because nothing in the UI was obliged to say otherwise.
+ *
+ * "at least" rather than "about" for `partial`: partial means some branch
+ * contributed nothing at all, so the true total can only be larger.
+ */
+function Duration({
+  value,
+  certainty,
+}: Readonly<{ value: number; certainty: "exact" | "estimated" | "partial" }>) {
+  const prefix =
+    certainty === "exact" ? "" : certainty === "estimated" ? "about " : "at least ";
+  return (
+    <span
+      className={cn(
+        "tabular-nums",
+        certainty === "exact" ? "text-zinc-400" : "text-amber-400/90",
+      )}
+      title={
+        certainty === "exact"
+          ? "Every clip in this subtree was counted"
+          : "Part of this subtree has not been read, so this is not a measurement"
+      }
+    >
+      {prefix}
+      {formatSeconds(value)}
+    </span>
+  );
+}
+
+defineNodeView("clip", function ClipCard({ id, data }) {
+  const selected = useIsSelected(id);
+  const selection = useSelectionActions();
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={() => selection.toggle(id)}
+      className={cn(
+        "flex w-full items-baseline justify-between gap-4 rounded-lg border px-3 py-2 text-left transition-colors",
+        selected
+          ? "border-sky-400/60 bg-sky-400/10 text-zinc-50"
+          : "border-zinc-800 bg-zinc-900/40 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-900",
+      )}
+    >
+      <span className="min-w-0 truncate text-sm">{data.title}</span>
+      <span className="shrink-0 text-xs tabular-nums text-zinc-500">
+        {formatSeconds(data.seconds)}
+      </span>
+    </button>
+  );
+});
+
+defineNodeView("collection", function CollectionCard({ id, data }) {
+  const children = useChildren(id);
+  const total = useFold("seconds", id);
+  const dispatch = useDispatch();
+  const [rejection, setRejection] = useState<string | null>(null);
+
+  // AN UNREAD COLLECTION IS NOT AN EMPTY ONE, and this is the only place the app
+  // can tell them apart. `useChildren` returns nothing for both — there are no
+  // child ids to hand back either way — so emptiness alone would render "B-roll"
+  // as a folder somebody emptied. The fold's certainty is the distinguishing
+  // fact: `estimated` means a stored summary answered for children nobody has
+  // read.
+  const unread = total?.certainty === "estimated" && children.length === 0;
+
+  const addClip = () => {
+    const result = dispatch({
+      type: "insert-nodes",
+      toParentId: id,
+      toIndex: children.length,
+      seeds: [{ kind: "clip", data: { title: "Untitled clip", seconds: 3 } }],
+    });
+    // EVERY FAILURE IS A TYPED RESULT, never a throw — so a refusal has to be
+    // read to be noticed. Inserting into an unread collection is refused with
+    // `target-not-loaded`, which is correct and is exactly the case a board
+    // would otherwise "succeed" at by writing into a parent whose real children
+    // it has never seen.
+    setRejection(result.ok ? null : `${result.error.code}: ${result.error.message}`);
+  };
+
+  return (
+    <section className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+      <header className="mb-2 flex items-baseline justify-between gap-3">
+        <h3 className="truncate text-sm font-semibold text-zinc-100">
+          {data.name}
+        </h3>
+        {total ? (
+          <Duration value={total.value} certainty={total.certainty} />
+        ) : null}
+      </header>
+
+      {unread ? (
+        <p className="rounded-lg border border-dashed border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-300/80">
+          Not read yet. Its stored summary is answering for it.
+        </p>
+      ) : children.length === 0 ? (
+        <p className="px-1 py-2 text-xs text-zinc-600">Empty.</p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {children.map((childId) => (
+            <NodeSlot key={childId} id={childId} />
+          ))}
+        </div>
+      )}
+
+      <div className="mt-2 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={addClip}
+          className="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:text-zinc-100"
+        >
+          Add clip
+        </button>
+        {rejection ? (
+          <span role="status" className="truncate text-xs text-red-400">
+            {rejection}
+          </span>
+        ) : null}
+      </div>
+    </section>
+  );
+});
+
+function Toolbar({ rootId }: Readonly<{ rootId: ReturnType<typeof parseNodeId> }>) {
+  const { canUndo, canRedo, undo, redo } = useHistory();
+  const total = useFold("seconds", rootId);
+  const button =
+    "flex items-center gap-1.5 rounded-md border border-zinc-800 px-2.5 py-1.5 text-xs text-zinc-300 transition-colors hover:border-zinc-700 hover:text-zinc-50 disabled:cursor-not-allowed disabled:border-zinc-900 disabled:text-zinc-700";
+  return (
+    <div className="mb-4 flex items-center gap-2">
+      <button type="button" disabled={!canUndo} onClick={() => undo()} className={button}>
+        <Undo2 className="size-3.5" /> Undo
+      </button>
+      <button type="button" disabled={!canRedo} onClick={() => redo()} className={button}>
+        <Redo2 className="size-3.5" /> Redo
+      </button>
+      {total ? (
+        <span className="ml-2 text-xs">
+          Reel runs <Duration value={total.value} certainty={total.certainty} />
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+export function Board() {
+  // ONE STORE FOR THE LIFE OF THE MOUNT. Built in a lazy initializer rather than
+  // at module scope so React Strict Mode's double render does not build two, and
+  // so a future document id can key it. `loadFixtureGraph` throws on a fixture
+  // that does not parse, which is what should happen — it ships with the app.
+  const [{ store, sealed }] = useState(() => {
+    const { graph, report } = loadFixtureGraph();
+    return { store: engine.createStore(graph), sealed: report.sealed };
+  });
+  const rootId = parseNodeId("reel");
+
+  return (
+    <Provider store={store}>
+      {/* SEALING IS A SUCCESS PATH, so `ok: true` alone would have said nothing.
+          A node whose kind this app does not know keeps its bytes and stays
+          movable, and the board simply renders fewer cards than the document
+          has. Saying so is the difference between a bug and a known state. */}
+      {sealed.length > 0 ? (
+        <p className="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
+          {sealed.length} node{sealed.length === 1 ? "" : "s"} could not be read
+          by this version and {sealed.length === 1 ? "is" : "are"} held as-is.
+        </p>
+      ) : null}
+      <Toolbar rootId={rootId} />
+      <NodeSlot id={rootId} />
+    </Provider>
+  );
+}

@@ -1,48 +1,28 @@
-"use client";
-
-import { MediaMonsterMark } from "@/components/brand/media-monster-mark";
-import { toast } from "@/components/core/sonner";
+import { Board } from "@/components/board/board";
 
 /**
- * A placeholder, and a smoke test for the shell.
+ * The first real view.
  *
- * Every piece the shell brought over is exercised here on purpose: the monster
- * renders (so a broken port shows up as a missing creature rather than as
- * nothing), the wordmark uses the loaded font at the weight it was loaded at,
- * the dark palette paints, and the button proves the toast surface is mounted.
+ * It replaces the shell's placeholder, which had done its job: it proved the
+ * monster rendered, the font loaded, the dark palette painted and the toast
+ * surface was mounted. Its "Test the toaster" button went with it — the only
+ * check that the surface existed, and worth nothing once a view with real
+ * controls sits here.
  *
- * It is meant to be replaced by the first real view. Nothing else should import
- * from it.
+ * A SERVER COMPONENT holding a client one. Nothing on this page needs the
+ * client until the engine does, and the engine's core is deliberately callable
+ * from the server — so when documents start arriving from storage, the fetch
+ * belongs here and only the board below it has to stay a client boundary.
  */
 export default function Home() {
   return (
-    <div className="flex min-h-[80vh] flex-col items-center justify-center gap-8">
-      <div className="flex items-center gap-3">
-        <MediaMonsterMark scale={2.4} />
-        <span
-          className="font-bold text-4xl"
-          style={{ fontFamily: "var(--font-grandstander)" }}
-        >
-          media <span className="text-blue-400">monster</span>
-        </span>
-      </div>
-
-      <p className="text-xl text-zinc-200">Tame the slop.</p>
-
-      <p className="max-w-lg text-center text-sm leading-relaxed text-zinc-400">
-        You asked a model for one shot and got forty back. Somewhere in that
-        pile is the one you actually wanted. Media Monster is where you herd
-        AI-generated clips into collections — nested as deep as you like — and
-        keep rearranging until the pile turns into a cut.
+    <div className="mx-auto max-w-2xl py-10">
+      <h1 className="mb-1 text-lg font-semibold text-zinc-100">First reel</h1>
+      <p className="mb-6 text-sm text-zinc-500">
+        A fixture document, running on the nested-collections engine. Changes are
+        undoable and are lost on reload.
       </p>
-
-      <button
-        type="button"
-        onClick={() => toast.success("The toast surface is mounted.")}
-        className="rounded-md border border-zinc-800 bg-zinc-900 px-4 py-2 text-sm text-zinc-100 transition-colors hover:bg-zinc-800"
-      >
-        Test the toaster
-      </button>
+      <Board />
     </div>
   );
 }
