@@ -39,81 +39,18 @@
  * last two are the ones worth checking against the real palette.
  */
 
-/** The source's literal, unchanged since turn 9: fur and body. */
-const SAGE = "oklch(0.86 0.17 128)";
-/** `--color-bg`: the eye white and the glint. A warm off-white. */
-const CREAM = "oklch(0.96 0.02 95)";
-/** `--color-accent-2-900`: the pupil, near-black. */
-const PUPIL = "oklch(0.27 0.03 145)";
-/**
- * The word "monster" in the rail's lockup.
- *
- * TAILWIND'S `blue-400`, RESOLVED, and deliberately not the source's colour.
- * The design document paints the word in `--color-accent-300`, the same pale
- * terracotta as the antenna knobs. That reads beautifully in the document and
- * makes the wordmark a stranger in this app: the projects list already labels
- * itself `text-blue-400`, so that blue is what the product calls a heading, and
- * the rail's wordmark was the last place still speaking the logo's private
- * dialect.
- *
- * Written as the resolved value rather than the class because it is consumed as
- * an inline `color` on a span inside the lockup, not as a utility. If the app's
- * blue ever moves this has to move with it by hand — the PAIRING is the point,
- * not the number.
- *
- * The antennae keep their own terracotta (`ANTENNA_KNOB` below). One token in
- * the source, two here on purpose: the antennae belong to the creature, the
- * word belongs to the product.
- */
-export const MEDIA_MONSTER_ACCENT = "oklch(0.707 0.165 254.624)";
-/**
- * The stalks.
- *
- * STANDS OFF THE SOURCE'S RAMP ON PURPOSE, and the reasoning the hat needed is
- * MORE pressing here, not less. The document paints the stalks from
- * `--color-accent` with `--color-accent-300` as the knob — a darker stem under
- * a lighter head, which is right on its own pale ground. On the rail's
- * near-black it is not: a 0.62-lightness stalk sits closer to the rail than to
- * anything it is attached to, and a stalk is 0.055em WIDE. On the collapsed
- * mark that is about 1.2px, which is a single antialiased column of pixels —
- * the thinnest thing in the whole drawing, and the first to disappear.
- *
- * So the pair is lifted TOGETHER and the contrast between them is what is
- * preserved, not the absolute values: stalk to 0.70 with the chroma pushed to
- * hold its identity against the near-black, knob to 0.89 so it stays the
- * lighter head the source drew. Raising only the stalk would have closed the
- * gap to the knob and flattened each antenna into one shape.
- */
-const ANTENNA_STALK = "oklch(0.70 0.18 45)";
-/** The knobs. Lighter than the stalks by more than the source needed — see
- *  above. Still terracotta, so each antenna stays one object and not two. */
-const ANTENNA_KNOB = "oklch(0.89 0.08 48)";
-/**
- * The feet: the SAME terracotta as the antenna knobs, which is the source's own
- * scheme restored.
- *
- * They were denim for a long time, and the argument for it had quietly expired
- * before this turn removed it — worth recording so nobody re-derives the dead
- * version. Denim was chosen when terracotta was also the WORD's colour, so
- * terracotta feet read as part of the letters rather than as part of the
- * creature. The word went blue (see `MEDIA_MONSTER_ACCENT`), and with it
- * the only thing that clash was ever about.
- *
- * What the source's scheme buys instead is a BOOKEND: the same pale terracotta
- * at the top of the creature and at the bottom of it, with the sage body
- * between, so the drawing reads as one object with two ends rather than as
- * three unrelated bands. It also means the two smallest shapes in the mark —
- * a 3.5px knob and a 4px foot — carry the same value, so they hold or fail
- * together instead of one of them going first.
- *
- * The rest of the old reasoning still applies as written, and is why this is
- * the LIGHT terracotta and not the stalks' darker one: cream would make the
- * feet the brightest thing in the rail, anything near-black vanishes outright
- * because the feet sit BELOW the body against the rail rather than against the
- * sage, and at about 4px tall a small shape needs MORE contrast than a large
- * one, not less.
- */
-const FEET = ANTENNA_KNOB;
+import React from "react";
+
+import { Antennae } from "@/components/brand/media-monster-antennae";
+export { MEDIA_MONSTER_ACCENT } from "@/components/brand/media-monster-palette";
+import {
+  CREAM,
+  FEET,
+  PUPIL,
+  SAGE,
+} from "@/components/brand/media-monster-palette";
+
+
 
 /** The source's circle, restored — see the head note in the header. */
 const BODY = 0.98;
@@ -132,7 +69,7 @@ const BODY_TOP = 0.99 - BODY;
  * "it must need to mirror when it collapses" is the obvious wrong assumption.
  *
  * IT IS A POSITION, NOT A TRANSFORM, and that is the whole reason it composes.
- * The aim and the settle in `globals.css` are transforms, so they read as
+ * The aim and the settle in `media-monster-motion.css` are transforms, so they read as
  * deltas from wherever the pupil sits — the eye still throws itself along the
  * jump and still comes home to `translate(0, 0)`, which now means "back to
  * watching the breadcrumb" instead of "dead centre". Putting the gaze in the
@@ -156,14 +93,14 @@ const BODY_TOP = 0.99 - BODY;
  * the eye from reading flat.
  *
  * It composes cleanly with the jump, and only because it is collapsed-only: the
- * aim in `globals.css` throws the pupil 26% of its own width ALONG travel, and
+ * aim in `media-monster-motion.css` throws the pupil 26% of its own width ALONG travel, and
  * the creature only ever ARRIVES collapsed by travelling left — so the aim
  * subtracts from a rightward gaze rather than stacking onto it, and the pupil
  * never reaches the rim. The eye white keeps its `overflow: hidden` regardless:
  * a pupil cannot leave an eye, and the next person to touch these numbers
  * should not have to rediscover that.
  */
-/* The numbers themselves are in `globals.css` — see the note above. Centred is
+/* The numbers themselves are in `media-monster-motion.css` — see the note above. Centred is
    (0.64 - 0.39) / 2 = 0.125em, and the breadcrumb gaze adds 0.075em to it. */
 
 /**
@@ -217,7 +154,7 @@ const FUR: React.CSSProperties = {
 };
 
 /** Marked so the settle can move the feet after the body has stopped — see
- *  `sw-foot-settle` in globals.css. The marker also carries WHICH foot: the two
+ *  `sw-foot-settle` in media-monster-motion.css. The marker also carries WHICH foot: the two
  *  splay apart in flight, which needs a side, and counting `:nth-child` past the
  *  fur and the body to work it out would break the next time a part is added. */
 const foot = (left: string): React.CSSProperties => ({
@@ -230,153 +167,6 @@ const foot = (left: string): React.CSSProperties => ({
   borderRadius: "999px",
 });
 
-/**
- * The pair, as ONE group — and the group being transform-free is load-bearing.
- *
- * It holds no transform of its own. That is what lets `globals.css` own the
- * antennae's motion: an inline `transform` beats any stylesheet rule, so a pair
- * whose resting pose lived on the animated element could not be animated from
- * CSS at all. The group therefore expresses DELTAS from rest, and rest is
- * simply no transform.
- *
- * IT CARRIES ONLY ONE THING NOW, and that is worth knowing before adding to it.
- * The bend lives on the segments (see `SEG_BEND`), so the whole pair's swing
- * and shear are gone from here; what is left is a `translateY` that tracks the
- * body's landing squash, so the antennae ride a head whose top edge is moving.
- * The two are derived from each other in `globals.css` and have to stay that
- * way.
- *
- * The origin is where the antennae attach — each stalk's root is 0.06em from
- * the mark's top — so anything that IS added here turns about the right point
- * rather than about the group's middle.
- */
-const ANTENNA_GROUP: React.CSSProperties = {
-  position: "absolute",
-  left: 0,
-  top: 0,
-  width: "1em",
-  height: "1em",
-  transformOrigin: "50% 6%",
-};
-
-/**
- * EACH STALK IS A CHAIN OF THREE, and that is what lets it ARC.
- *
- * A stalk drawn as one bar can lean and it can shear, but it cannot bend: both
- * are affine, and an affine map takes a straight edge to a straight edge. What
- * actually bends is a chain — three short segments, each a child of the one
- * below it and each rotated by the SAME angle, so the rotations compound down
- * the chain (b, 2b, 3b) and the three chords approximate an arc. Ten degrees a
- * segment is thirty at the tip, which on the collapsed mark carries the knob
- * 3.0px back from where it rests.
- *
- * THE ROOT IS A FIXED POINT OF IT, which is the second reason to prefer this
- * over the shear it replaces. The first segment turns about its own bottom
- * edge, so no amount of bend moves where the antenna enters the head — the
- * root-lift ceiling that a rotating group has (see `sw-antennae-settle`) simply
- * does not exist here. The knob rides the last segment and therefore ROTATES
- * rather than shearing, so it stays a circle at every angle; the old skew
- * ovalised it by a pixel at full lean.
- *
- * THE BEND ARRIVES AS A CUSTOM PROPERTY, `--sw-antenna-bend`, for the same
- * reason the gaze does: an inline `transform` beats any stylesheet rule, and
- * every one of these segments needs an inline transform to read the property at
- * all. So the component owns the expression and `globals.css` owns the VALUE,
- * set on an ancestor and inherited down. One declaration there bends all six
- * segments at once.
- */
-const SEG_BEND = "rotate(var(--sw-antenna-bend, 0deg))";
-
-/**
- * Where each antenna leaves the head, and how long its chain is.
- *
- * DERIVED FROM THE SOURCE'S OWN NUMBERS rather than replacing them. 48a draws
- * each stalk as a bar at a fixed lean and then FLOATS the knob near its tip,
- * by eye and not quite symmetrically — the left knob sits 0.0875em outboard of
- * its root and the right one 0.1025em, over the same 0.40em rise. Rebuilding
- * the stalk as a chain means the knob has to ride it, so the chain's angle and
- * length are solved from where the source put that knob: 12.34deg over 0.4095em
- * on the left, 14.37deg over 0.4129em on the right. At rest this lands both
- * knobs within 0.0015em of the source's own positions, asymmetry included.
- *
- * The chain is LONGER than the source's 0.32em bar because it runs to the knob's
- * CENTRE rather than to its edge. The extra 0.09em is covered by the knob, which
- * is painted after it, so the visible stalk is the source's length exactly.
- */
-const ANTENNA = {
-  left: { x: 0.3275, splay: -12.34, seg: 0.1365 },
-  right: { x: 0.6775, splay: 14.37, seg: 0.1376 },
-} as const;
-
-/** The anchor each chain grows out of: a zero-size point at the root, carrying
- *  the fixed splay. The splay is inline because nothing animates it — the bend
- *  and the pair's tracking are separate channels on separate elements. */
-const antennaRoot = (side: keyof typeof ANTENNA): React.CSSProperties => ({
-  position: "absolute",
-  left: `${ANTENNA[side].x}em`,
-  top: "0.06em",
-  width: 0,
-  height: 0,
-  transform: `rotate(${ANTENNA[side].splay}deg)`,
-  transformOrigin: "0 0",
-});
-
-/** The first segment: bottom edge on the root point, centred across it. */
-const segRoot = (side: keyof typeof ANTENNA): React.CSSProperties => ({
-  position: "absolute",
-  left: "-0.0275em",
-  bottom: 0,
-  width: "0.055em",
-  height: `${ANTENNA[side].seg}em`,
-  background: ANTENNA_STALK,
-  borderRadius: "999px",
-  transform: SEG_BEND,
-  transformOrigin: "50% 100%",
-});
-
-/** Every segment after the first: same bar, standing on the one below. */
-const segNext = (side: keyof typeof ANTENNA): React.CSSProperties => ({
-  position: "absolute",
-  left: 0,
-  bottom: "100%",
-  width: "100%",
-  height: `${ANTENNA[side].seg}em`,
-  background: ANTENNA_STALK,
-  borderRadius: "999px",
-  transform: SEG_BEND,
-  transformOrigin: "50% 100%",
-});
-
-/** The knob, centred on the chain's tip: `bottom: 100%` puts its bottom edge
- *  there and the negative margin pulls it down by its own radius. It inherits
- *  the last segment's rotation, so it turns with the arc and stays circular. */
-const KNOB: React.CSSProperties = {
-  position: "absolute",
-  left: "50%",
-  bottom: "100%",
-  width: "0.16em",
-  height: "0.16em",
-  marginLeft: "-0.08em",
-  marginBottom: "-0.08em",
-  borderRadius: "999px",
-  background: ANTENNA_KNOB,
-};
-
-/** One antenna: the root anchor, three segments nested so their bends compound,
- *  and the knob riding the last one. */
-function Antenna({ side }: Readonly<{ side: keyof typeof ANTENNA }>) {
-  return (
-    <span data-monster-antenna={side} style={antennaRoot(side)}>
-      <span style={segRoot(side)}>
-        <span style={segNext(side)}>
-          <span style={segNext(side)}>
-            <span data-monster-knob="" style={KNOB} />
-          </span>
-        </span>
-      </span>
-    </span>
-  );
-}
 
 export function MediaMonsterMark({
   scale = 1,
@@ -394,7 +184,7 @@ export function MediaMonsterMark({
    *
    * Removing them is genuinely free, and freer than removing the hat was. The
    * antennae are their own absolutely-positioned layer above the body, and
-   * every rule that animates them in `globals.css` — the flight pose,
+   * every rule that animates them in `media-monster-motion.css` — the flight pose,
    * `sw-antennae-settle`, the reduced-motion guard — keys off
    * `[data-monster-antennae]`, so with nothing rendered they match nothing and
    * do nothing. No orphaned animation, no layout shift.
@@ -403,20 +193,24 @@ export function MediaMonsterMark({
    * did. The egg existed to clear a brim; antennae leave the skull from a point
    * and need no clearance, so the body is the source's circle either way and
    * bare-versus-not is now purely a question of whether two stalks are drawn.
-   * See the `WithoutTheAntennae` story for the two side by side.
+   *
+   * NOTHING PASSES `false` HERE YET, and nothing can show the two side by side:
+   * the source app has a `WithoutTheAntennae` story for that and this app has no
+   * Storybook. The prop came over with the drawing because removing it would
+   * mean re-deriving that the body no longer depends on it.
    */
   antennae?: boolean;
 }>) {
   // THE GAZE TRAVELS AS A CUSTOM PROPERTY, which is the one channel a stylesheet
   // can still take back. Written as an inline `left` it worked everywhere and
   // could be overridden nowhere — inline beats any rule — so the pre-jump look
-  // in `globals.css` silently did nothing. Written only in `globals.css` it was
+  // in `media-monster-motion.css` silently did nothing. Written only in `media-monster-motion.css` it was
   // overridable but invisible in Storybook, which loads its own Tailwind entry
   // and never sees the app's stylesheet; the mark's own story failed on it.
   //
   // A custom property set HERE and read by the pupil's `left` below satisfies
   // both: the component still owns its resting positions and renders correctly
-  // anywhere, and `globals.css` re-declares the property ON THE PUPIL for the
+  // anywhere, and `media-monster-motion.css` re-declares the property ON THE PUPIL for the
   // flight pose, where a value set directly on the element beats one inherited
   // from this ancestor.
   return (
@@ -461,7 +255,7 @@ export function MediaMonsterMark({
         // The jump then vanished mid-flight when the transition it had
         // hitched a ride on finished on its own schedule.
         //
-        // So the name lives in `globals.css` behind `[data-hopping]`, which
+        // So the name lives in `media-monster-motion.css` behind `[data-hopping]`, which
         // `writeRailExpanded` sets before it starts the transition and clears
         // when that transition finishes — the same lifecycle `data-aiming`
         // already has. Inline would beat that rule outright, which is why this
@@ -514,7 +308,7 @@ export function MediaMonsterMark({
           scale here reaches the eye and the glint inside the head and nothing
           above it. That separation is the whole reason the landing can be
           heavy on the body and light on the stalks — see `sw-body-settle` in
-          globals.css, and the tracking note beside it for how the antennae
+          media-monster-motion.css, and the tracking note beside it for how the antennae
           stay rooted while this moves under them. */}
       <span
         data-monster-body=""
@@ -557,7 +351,7 @@ export function MediaMonsterMark({
             corner, or a clip-path -- not stack a second copy behind it. */}
         {/* eye white — marked because the WHOLE eye turns before a jump, not
             just the pupil sliding inside a fixed one. See the departure pose in
-            globals.css. */}
+            media-monster-motion.css. */}
         <span
           data-monster-eye=""
           style={{
@@ -611,12 +405,7 @@ export function MediaMonsterMark({
       </span>
       <span data-monster-foot="left" style={foot("0.08em")} />
       <span data-monster-foot="right" style={foot("0.55em")} />
-      {antennae ? (
-        <span data-monster-antennae="" style={ANTENNA_GROUP}>
-          <Antenna side="left" />
-          <Antenna side="right" />
-        </span>
-      ) : null}
+      {antennae ? <Antennae /> : null}
     </span>
   );
 }
