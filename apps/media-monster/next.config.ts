@@ -16,6 +16,23 @@ const nextConfig: NextConfig = {
    * time; this is the one written on every dev run.
    */
   agentRules: false,
+  /**
+   * NO DEV INDICATOR, because it lands on top of the rail.
+   *
+   * Next draws its dev-tools badge in the BOTTOM LEFT, which is exactly where
+   * the rail pins its own controls — the same corner an IDE puts them in, and
+   * the reason the collapse toggle is there. Measured rather than guessed:
+   * `elementFromPoint` at the toggle's centre returned `NEXTJS-PORTAL`, not the
+   * button, so a real click on the rail's only control never reached it.
+   *
+   * It is dev-only, so this costs nothing in production and is invisible in a
+   * build — which is what makes it the kind of thing that survives unnoticed
+   * until someone tries to press the control underneath it.
+   *
+   * `apps/timeline-gstudio001` carries the same line. It should have come over
+   * with the shell, like the `distDir` split below.
+   */
+  devIndicators: false,
   reactStrictMode: true,
   /**
    * DEV AND BUILD GET SEPARATE DIRECTORIES.

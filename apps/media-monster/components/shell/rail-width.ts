@@ -9,11 +9,12 @@
  * somewhere with no runtime is what stops that seam from ever existing here.
  *
  * Ported from `sidebar-rail-preference.ts` and `sidebar-icon-styles.ts` in
- * `apps/timeline-gstudio001`, which are 65 and 187 lines respectively and carry
- * the cookie parser, the tile styles and the glyph insets alongside these. Only
- * the widths came over: there is no rail yet to have a preference about, and
- * copying a cookie parser this app cannot use would be copying a decision
- * rather than a value. The rest arrives with the rail.
+ * `apps/timeline-gstudio001`, which carry the cookie parser, the tile styles and
+ * the glyph insets alongside these numbers. The rail has since arrived and
+ * brought its share of those with it — `rail-preference.ts` for the cookie,
+ * `rail-tile-styles.ts` for the treatment. This file stays the widths alone,
+ * because those two are the only modules the widths must not depend on: the root
+ * layout imports this, and a layout is a server component.
  */
 
 /**
@@ -26,15 +27,22 @@
  */
 export const RAIL_WIDTH_VAR = "--sw-rail-width";
 
-/** The rail's collapsed width, and what the shell reserves today. */
+/** The rail's collapsed width, and the tile edge that follows from it. */
 export const RAIL_WIDTH_PX = 72;
 
 /**
  * The rail's width with labels showing.
  *
- * Unused until the rail lands, and here anyway because it is the other half of
- * what `RAIL_WIDTH_VAR` can hold — a reader sizing something against the
- * variable needs to know its range, not just its current value. THE WORDMARK
- * sets this number, not the labels.
+ * THE WORDMARK SETS THIS NUMBER, not the labels. Measured in the source app at
+ * 240: the mark's ink is 159px starting 22px in, which leaves 59px clear. It was
+ * 232 when it had to fit "Storyboard Workbench" and cleared that by three
+ * pixels — enough then, and not enough to survive a font fallback rendering a
+ * fraction wider. The creature is the MEDIA monster now, so the shorter name has
+ * more room at the narrower rail than the old one had at a wider one.
+ *
+ * Collection names are the other tenant here when they arrive, and they are
+ * user-authored, so no width could ever be "enough" for them; they truncate,
+ * which degrades to an ellipsis rather than shoving the rail's rhythm out of
+ * line.
  */
 export const RAIL_OPEN_WIDTH_PX = 240;

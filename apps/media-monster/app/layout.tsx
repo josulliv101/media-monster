@@ -1,7 +1,17 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { Grandstander } from "next/font/google";
 import { Toaster } from "@/components/core/sonner";
-import { RAIL_WIDTH_VAR, RAIL_WIDTH_PX } from "@/components/shell/rail-width";
+import { Rail } from "@/components/shell/rail";
+import {
+  RAIL_EXPANDED_COOKIE,
+  railExpandedFromValue,
+} from "@/components/shell/rail-preference";
+import {
+  RAIL_OPEN_WIDTH_PX,
+  RAIL_WIDTH_VAR,
+  RAIL_WIDTH_PX,
+} from "@/components/shell/rail-width";
 import "./globals.css";
 
 /**
@@ -30,7 +40,7 @@ export const metadata: Metadata = {
   description: "Nested collections, built on the graph engine.",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   /**
@@ -40,12 +50,17 @@ export default function RootLayout({
    * light-mode machine rendered white-on-near-black buttons nobody else could
    * see.
    *
-   * NOT A SERVER COMPONENT READING COOKIES, unlike the app this came from. That
-   * one is `async` because it awaits a session and the rail's width preference,
-   * and both of those are decisions this app has not made yet. It stays sync
-   * until it has something to await — an `async` layout with nothing in it is a
-   * dynamic render bought for nothing.
+   * ASYNC NOW, AND ONLY BECAUSE OF THE RAIL. It was sync while there was
+   * nothing to await, on the grounds that an empty `async` layout buys a dynamic
+   * render for nothing. The rail's width is the first thing that has to be known
+   * before the first byte: read it after paint and everything beside the rail
+   * starts 168px out of place and jumps. A dynamic render is what correctness
+   * costs here, and it is the trade the source app made for the same reason.
    */
+  const railExpanded = railExpandedFromValue(
+    (await cookies()).get(RAIL_EXPANDED_COOKIE)?.value,
+  );
+
   return (
     <html
       lang="en"
@@ -53,20 +68,23 @@ export default function RootLayout({
       /**
        * THE RAIL'S WIDTH, PUBLISHED BEFORE ANYTHING PAINTS.
        *
-       * A fixed value for now, because there is no rail and therefore no
-       * preference to read. It is a variable rather than a literal so that the
-       * surfaces beside the rail are already offset by the right mechanism when
-       * the real one lands: in the source app this is written from a COOKIE, so
-       * the server's own markup is correct on the first paint. The preference
-       * used to live only in `localStorage`, which the server cannot read, so
-       * the rail rendered collapsed and widened on hydration — shoving `main`
-       * 188px sideways for 0.135 of a 0.16 CLS.
+       * Written from the COOKIE, so the server's own markup is already the right
+       * width and hydration has nothing to correct. In the source app the
+       * preference lived only in `localStorage`, which the server cannot read,
+       * so the rail rendered collapsed and widened on hydration — shoving `main`
+       * 188px sideways for 0.135 of a 0.16 cumulative layout shift.
        *
-       * Keeping the variable now means that fix is a change of VALUE later, not
-       * a change of shape.
+       * A variable rather than a literal because the READERS are the point:
+       * surfaces beside the rail offset themselves by this, and they keep
+       * working when the number moves. The rail writes it again on every toggle,
+       * which the server will not hear about until the next request.
        */
       style={
-        { [RAIL_WIDTH_VAR]: `${RAIL_WIDTH_PX}px` } as React.CSSProperties
+        {
+          [RAIL_WIDTH_VAR]: `${
+            railExpanded ? RAIL_OPEN_WIDTH_PX : RAIL_WIDTH_PX
+          }px`,
+        } as React.CSSProperties
       }
     >
       <body suppressHydrationWarning>
@@ -74,20 +92,18 @@ export default function RootLayout({
             view — the same reason it sits here in the source app. */}
         <Toaster />
         <div className="relative flex min-h-screen overflow-x-clip bg-zinc-950 font-sans text-white">
-          {/* THE PLACEHOLDER RESERVES THE RAIL'S WIDTH, and that is its whole
-              job — it is not a stub waiting to be filled with markup.
+          {/* THE RAIL FILLS THE SLOT THE PLACEHOLDER HELD. It is `shrink-0` and
+              carries its own width, so `main` — its `flex-1` sibling — is
+              offset by exactly what the variable above already reserved. The
+              placeholder existed so this substitution would move nothing: in
+              the source app a rail arriving into an unreserved layout shifted
+              `main` from x:0 w:1385 to x:260 w:1125, which measured 0.1837 and
+              was the entire cumulative layout shift of the page.
 
-              `main` is its `flex-1` sibling, so with nothing here at all `main`
-              lays out across the whole row and will be shoved sideways the
-              moment a rail appears beside it. In the source app that exact
-              shift — `main` x:0 w:1385 -> x:260 w:1125 — measured 0.1837 and
-              was the entire CLS of the page. Reserving the width now means the
-              rail arrives into a slot rather than into the layout. */}
-          <div
-            aria-hidden
-            className="shrink-0"
-            style={{ width: `var(${RAIL_WIDTH_VAR})` }}
-          />
+              It renders from the SERVER'S reading of the cookie, so the first
+              paint is already the right width and hydration has nothing to
+              correct. */}
+          <Rail initialRailExpanded={railExpanded} />
           <main className="min-w-0 flex-1 px-8 pt-[13px]">{children}</main>
         </div>
       </body>
