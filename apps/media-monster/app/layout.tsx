@@ -37,7 +37,8 @@ const grandstander = Grandstander({
 
 export const metadata: Metadata = {
   title: "Media Monster",
-  description: "Nested collections, built on the graph engine.",
+  description:
+    "Herd AI-generated clips into collections, nested as deep as you like, until the pile turns into a cut.",
 };
 
 export default async function RootLayout({
