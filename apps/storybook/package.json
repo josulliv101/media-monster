@@ -13,8 +13,8 @@
     "@josulliv101/nested-collections": "*",
     "@storyboard/ui": "*",
     "next": "^16.3.1",
-    "react": "^19.2.1",
-    "react-dom": "^19.2.1"
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
   },
   "devDependencies": {
     "@atlaskit/pragmatic-drag-and-drop": "^2.0.1",
