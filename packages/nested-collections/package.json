@@ -17,12 +17,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/josulliv101/storyboard-flow.git",
+    "url": "git+https://github.com/josulliv101/media-monster.git",
     "directory": "packages/nested-collections"
   },
-  "homepage": "https://github.com/josulliv101/storyboard-flow/tree/main/packages/nested-collections#readme",
+  "homepage": "https://github.com/josulliv101/media-monster/tree/main/packages/nested-collections#readme",
   "bugs": {
-    "url": "https://github.com/josulliv101/storyboard-flow/issues"
+    "url": "https://github.com/josulliv101/media-monster/issues"
   },
   "type": "module",
   "sideEffects": false,
