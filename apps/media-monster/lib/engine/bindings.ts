@@ -32,6 +32,7 @@ export const {
   useDispatch,
   useHistory,
   useIsSelected,
+  useNode,
   useSelectionActions,
   defineNodeView,
 } = createReactBindings(engine);

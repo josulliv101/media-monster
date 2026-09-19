@@ -529,22 +529,25 @@ describe("parseNodeData", () => {
     expect(parsed.data).toEqual({ text: "t", color: "blue" });
   });
 
-  it("runs nothing for a document written by a NEWER build", () => {
-    // No migration walks backwards. Refusing here would make every rolling
-    // deploy produce documents that will not open; letting `parse` decide means
-    // an additive change reads fine and a breaking one seals loudly.
+  it("runs nothing and seals for a document written by a NEWER build", () => {
+    // No migration walks backwards, and letting this build's `parse` read the
+    // bytes loses every field it does not know on the next save. Sealed, the
+    // node round-trips byte-exact; see
+    // ../tests/review7-a-newer-schema-node-survives-an-older-build.test.ts.
     migrationLog.length = 0;
-    const parsed = expectOk(
-      parseNodeData(makeCtx(), {
-        nodeId: id("n"),
-        kind: "note",
-        container: false,
-        schemaVersion: 99,
-        raw: { text: "from the future", color: "blue" },
-      }),
-    );
+    const result = parseNodeData(makeCtx(), {
+      nodeId: id("n"),
+      kind: "note",
+      container: false,
+      schemaVersion: 99,
+      raw: { text: "from the future", color: "blue" },
+    });
     expect(migrationLog).toEqual([]);
-    expect(parsed.migratedFrom).toBeNull();
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.reason).toBe("parse-failed");
+      expect(result.error.issues[0]?.path).toBe("$.schemaVersion");
+    }
   });
 
   it("handles sparse, very large version numbers", () => {
