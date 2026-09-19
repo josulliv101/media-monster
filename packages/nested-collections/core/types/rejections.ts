@@ -75,6 +75,13 @@ export type RejectionCode =
    */
   | "would-exceed-max-nodes"
   | "would-exceed-max-depth"
+  /**
+   * No id of at most `EngineConfig.maxNodeIdLength` characters is free. The
+   * consumer `mintId` kept returning unusable ids AND the engine's own short
+   * fallback ran out of room under that ceiling. Refused rather than minting
+   * an over-long id, which would save a document `deserialize` then refuses.
+   */
+  | "would-exceed-max-node-id-length"
   /** The consumer's PRE-commit `commandPolicy` vetoed it. */
   | "policy-rejected";
 
@@ -91,7 +98,7 @@ export type Rejection = Readonly<{
   issues?: readonly Issue[];
   /** The node type's verbatim complaint, on `"edit-rejected"`. */
   editRejection?: EditRejection;
-  /** The ceiling that was hit, on the two `would-exceed-*` codes. Named the
+  /** The ceiling that was hit, on the `would-exceed-*` codes. Named the
    *  same as `StructuralError`'s pair so a consumer reporting a limit to the
    *  user reads it the same way whichever door refused. */
   limit?: number;

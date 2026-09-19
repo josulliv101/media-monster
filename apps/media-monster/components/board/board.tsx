@@ -13,6 +13,7 @@ import {
   useFold,
   useHistory,
   useIsSelected,
+  useNode,
   useSelectionActions,
 } from "@/lib/engine/bindings";
 import { engine } from "@/lib/engine/engine";
@@ -115,6 +116,7 @@ defineNodeView("clip", function ClipCard({ id, data }) {
 });
 
 defineNodeView("collection", function CollectionCard({ id, data }) {
+  const node = useNode(id);
   const children = useChildren(id);
   const total = useFold("seconds", id);
   const dispatch = useDispatch();
@@ -123,10 +125,19 @@ defineNodeView("collection", function CollectionCard({ id, data }) {
   // AN UNREAD COLLECTION IS NOT AN EMPTY ONE, and this is the only place the app
   // can tell them apart. `useChildren` returns nothing for both — there are no
   // child ids to hand back either way — so emptiness alone would render "B-roll"
-  // as a folder somebody emptied. The fold's certainty is the distinguishing
-  // fact: `estimated` means a stored summary answered for children nobody has
-  // read.
-  const unread = total?.certainty === "estimated" && children.length === 0;
+  // as a folder somebody emptied.
+  //
+  // READ THE NODE'S OWN LOAD STATE, not the fold's certainty. This used to infer
+  // "unread" from `estimated`, which only a STORED SUMMARY produces: an unread
+  // collection with no summary folds to `partial` instead, and rendered "Empty."
+  // `children.status` is the fact itself. Narrowed on `sealed` first, because a
+  // sealed node's `container` comes off the wire and cannot discriminate; a
+  // sealed leaf carries `null`, which reads as loaded — it has no children.
+  const childrenState =
+    node === undefined ? null : node.sealed || node.container ? node.children : null;
+  const loadState = childrenState?.status ?? "loaded";
+  const unread = loadState === "unloaded" || loadState === "reference";
+  const summarized = total?.certainty === "estimated";
 
   const addClip = () => {
     const result = dispatch({
@@ -156,8 +167,12 @@ defineNodeView("collection", function CollectionCard({ id, data }) {
 
       {unread ? (
         <p className="rounded-lg border border-dashed border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-300/80">
-          Not read yet. Its stored summary is answering for it.
+          {summarized
+            ? "Not read yet. Its stored summary is answering for it."
+            : "Not read yet, and nothing is stored about what it holds."}
         </p>
+      ) : loadState === "missing" ? (
+        <p className="px-1 py-2 text-xs text-zinc-500">Gone from storage.</p>
       ) : children.length === 0 ? (
         <p className="px-1 py-2 text-xs text-zinc-600">Empty.</p>
       ) : (

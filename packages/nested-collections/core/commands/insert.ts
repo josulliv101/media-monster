@@ -48,13 +48,19 @@ import { fail, ok } from "./results";
  * the graph would hold a node that saves cleanly and never loads again — the
  * shape this package has already paid for at the node ceiling and at the depth
  * one. The existing retry-then-fall-back is the whole mechanism; this only adds
- * a term to what "acceptable" means. The fallback `graph-node-N` is short by
- * construction, so it cannot itself trip the ceiling.
+ * a term to what "acceptable" means.
+ *
+ * THE FALLBACK IS HELD TO THE CEILING TOO. This comment used to call
+ * `graph-node-N` "short by construction" — it is twelve characters at least,
+ * and `maxNodeIdLength` accepts any positive integer, so a ceiling of 4 minted
+ * an id the next load refused. Under a ceiling too short for the readable form,
+ * the fallback counts in base 36 instead, and when even that has no free id of
+ * the allowed length it answers `null` so the command can refuse, typed.
  */
 function mintFreshId<S>(
   taken: ReadonlySet<string>,
   ctx: EngineContext<S>,
-): NodeId {
+): NodeId | null {
   const fits = (id: string): boolean =>
     ctx.maxNodeIdLength === null || id.length <= ctx.maxNodeIdLength;
 
@@ -65,7 +71,10 @@ function mintFreshId<S>(
     }
   }
   for (let counter = 0; ; counter += 1) {
-    const candidate = `graph-node-${counter}`;
+    const readable = `graph-node-${counter}`;
+    const candidate = fits(readable) ? readable : counter.toString(36);
+    // Every shorter base-36 id has been tried by now, so nothing longer fits.
+    if (!fits(candidate)) return null;
     if (!taken.has(candidate)) {
       // Always ok — the literal is non-empty — but branded through the door
       // rather than cast, so this file contains no cast at all.
@@ -403,6 +412,14 @@ function buildSeedPlacements<Ts extends readonly WidenedNodeType[], S>(
     }
 
     const nodeId = mintFreshId(taken, ctx);
+    if (nodeId === null) {
+      return fail(
+        "would-exceed-max-node-id-length",
+        `No free node id fits the ${String(ctx.maxNodeIdLength)}-character ceiling. ` +
+          `Raise or clear EngineConfig.maxNodeIdLength, or give mintId room to return shorter ids.`,
+        { kind: seed.kind, limit: ctx.maxNodeIdLength ?? undefined },
+      );
+    }
     taken.add(nodeId);
 
     // The seed's `data` is already typed as the kind's `Data`, and it STILL goes

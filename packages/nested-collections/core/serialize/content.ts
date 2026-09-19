@@ -249,11 +249,26 @@ function runMigrations(
   migrations: Readonly<Record<number, (raw: unknown) => unknown>> | undefined,
 ): Result<Readonly<{ data: unknown; migratedFrom: number | null }>, Issue> {
   // `from > to` means the document was written by a NEWER build than this one.
-  // No migration can walk backwards, so nothing runs and the value goes
-  // straight to `parse` — a node type that tolerates unknown additive fields reads
-  // it fine, and one that does not seals the node loudly. Refusing here
-  // instead would turn every rolling deploy into a document that will not open.
-  if (migrations === undefined || from >= to) {
+  // No migration can walk backwards, and handing the bytes to this build's
+  // `parse` is NOT the safe default it looks like: a tolerant parse drops the
+  // fields it does not know, `serialize` writes the rest back labelled with
+  // THIS registry's version, and the newer build reloads a document that has
+  // silently lost data. So the node SEALS — the document still opens, the node
+  // still moves and deletes, and its raw bytes and own `schemaVersion` are
+  // re-emitted exactly (see `serializeGraph`). Refusing the whole document
+  // instead would turn every rolling deploy into one that will not open.
+  if (from > to) {
+    return {
+      ok: false,
+      error: {
+        path: "$.schemaVersion",
+        message:
+          `Written at version ${from}, newer than this build's ${to}. ` +
+          `Held sealed so the newer fields survive a save.`,
+      },
+    };
+  }
+  if (migrations === undefined || from === to) {
     return { ok: true, value: { data: raw, migratedFrom: null } };
   }
 

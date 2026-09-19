@@ -644,7 +644,7 @@ export function createEngine<
      *      saw a failure for a mutation that had actually succeeded.
      *   2. Every listener after it in the same set was starved. One consumer's
      *      bad callback silently disabled another's.
-     *   3. Worst, `emitChange` is sequenced after `commitGraph`, so a throwing
+     *   3. Worst, the change feed drains after `commitGraph`, so a throwing
      *      GRAPH subscriber meant the change feed never emitted at all. The
      *      edit existed in memory and in the undo stack and was never announced
      *      to whatever performs the write. Measured: graph committed, `canUndo`
@@ -786,12 +786,55 @@ export function createEngine<
       if (selectionChanged) notifyAll("selection", selectionListeners);
     };
 
-    const emitChange = (change: Change<Ts, S>): void => {
-      for (const listener of [...changeListeners]) {
-        notifyOne("change-feed", () => {
-          listener(change);
-        });
+    /**
+     * THE CHANGE FEED IS A LOG, and every listener must read it in the order
+     * the graph committed. Two re-entry paths used to invert it: a GRAPH
+     * subscriber that dispatched ran its whole dispatch — commit and emit —
+     * inside the outer commit, before the outer patch was emitted; and a CHANGE
+     * listener that dispatched delivered the nested patch to every listener
+     * after it before they had seen the outer one. A persistence layer
+     * replaying either order applies a patch whose `before` does not match.
+     *
+     * So a change is QUEUED BEFORE its commit notifies anyone, and the queue
+     * drains only when no commit is mid-notification and no drain is already
+     * running. A nested dispatch still commits synchronously — its caller gets
+     * its patch and `canUndo()` is current — but its change waits its turn.
+     */
+    const pendingChanges: Change<Ts, S>[] = [];
+    let commitsNotifying = 0;
+    let drainingChanges = false;
+
+    const drainChanges = (): void => {
+      if (commitsNotifying > 0 || drainingChanges) return;
+      drainingChanges = true;
+      try {
+        for (let change = pendingChanges.shift(); change !== undefined; change = pendingChanges.shift()) {
+          const delivered = change;
+          for (const listener of [...changeListeners]) {
+            notifyOne("change-feed", () => {
+              listener(delivered);
+            });
+          }
+        }
+      } finally {
+        drainingChanges = false;
       }
+    };
+
+    /** Commit, then emit — with the change already in line before anyone hears of the commit. */
+    const commitAndEmit = (
+      next: Graph<Ts, S>,
+      label: string,
+      change: Change<Ts, S>,
+    ): void => {
+      pendingChanges.push(change);
+      commitsNotifying += 1;
+      try {
+        commitGraph(next, label);
+      } finally {
+        commitsNotifying -= 1;
+      }
+      drainChanges();
     };
 
     /**
@@ -954,8 +997,7 @@ export function createEngine<
           at,
           coalesceKey: options?.coalesceKey,
         });
-        commitGraph(nextGraph, "dispatch");
-        emitChange({
+        commitAndEmit(nextGraph, "dispatch", {
           patch,
           source: "command",
           detachedSubtrees: patchDetachedSubtrees(patch),
@@ -1019,8 +1061,7 @@ export function createEngine<
         history = committed.history;
 
         const at = ctx.now();
-        commitGraph(applied.value, "undo");
-        emitChange({
+        commitAndEmit(applied.value, "undo", {
           patch: inverse,
           source: "undo",
           detachedSubtrees: patchDetachedSubtrees(inverse),
@@ -1072,8 +1113,7 @@ export function createEngine<
         history = committed.history;
 
         const at = ctx.now();
-        commitGraph(applied.value, "redo");
-        emitChange({
+        commitAndEmit(applied.value, "redo", {
           patch: forward,
           source: "redo",
           detachedSubtrees: patchDetachedSubtrees(forward),
