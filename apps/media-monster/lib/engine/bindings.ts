@@ -29,10 +29,12 @@ export const {
   NodeSlot,
   useChildren,
   useFold,
+  useGraph,
   useDispatch,
   useHistory,
   useIsSelected,
   useNode,
   useSelectionActions,
+  useSelectionAnchor,
   defineNodeView,
 } = createReactBindings(engine);

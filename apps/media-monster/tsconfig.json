@@ -31,6 +31,9 @@
       ],
       "@josulliv101/nested-collections/react": [
         "../../packages/nested-collections/react/index.ts"
+      ],
+      "@storyboard/ui/film-strip": [
+        "../../packages/ui/film-strip/index.ts"
       ]
     }
   },

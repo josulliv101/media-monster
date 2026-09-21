@@ -55,7 +55,11 @@ const nextConfig: NextConfig = {
    * here. That belongs in a build-and-import check on the package itself, not in
    * making every developer build before the app will start.
    */
-  transpilePackages: ["@josulliv101/nested-collections"],
+  //
+  // `@storyboard/ui` is here for the film strip, and ONLY the film strip: the
+  // app maps just `@storyboard/ui/film-strip` in `tsconfig.json`, so nothing
+  // else in that package is reachable from here by accident.
+  transpilePackages: ["@josulliv101/nested-collections", "@storyboard/ui"],
   reactStrictMode: true,
   /**
    * DEV AND BUILD GET SEPARATE DIRECTORIES.
