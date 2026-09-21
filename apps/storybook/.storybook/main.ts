@@ -1,4 +1,6 @@
 import type { StorybookConfig } from '@storybook/nextjs-vite';
+import { transformAsync } from '@babel/core';
+import { normalizePath, type Plugin } from 'vite';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -6,6 +8,54 @@ const storybookDir = dirname(fileURLToPath(import.meta.url));
 const compatShim = (name: string) => resolve(storybookDir, 'shims', `es-toolkit-compat-${name}.ts`);
 const timelineAppDir = resolve(storybookDir, '../../timeline-gstudio001');
 const uiPackageDir = resolve(storybookDir, '../../../packages/ui');
+
+/**
+ * THE REACT COMPILER, for the source that is written to depend on it.
+ *
+ * `@storyboard/ui/film-strip` carries no `useMemo`/`useCallback`: media-monster
+ * runs the compiler (`reactCompiler` in its next.config.ts) and it memoizes the
+ * component instead. Rendered here WITHOUT it, every callback would be new on
+ * every render and the effects keyed on them would re-run — one of them cancels
+ * a fling in flight. So Storybook compiles the same directories the app relies
+ * on the compiler for, and nothing else: the rest of the package was written
+ * with manual memo and is left exactly as it builds today.
+ */
+const REACT_COMPILED_DIRS = [resolve(uiPackageDir, 'film-strip')].map(normalizePath);
+
+function reactCompilerFor(dirs: readonly string[]): Plugin {
+  return {
+    name: 'storyboard:react-compiler-scoped',
+    enforce: 'pre',
+    async transform(code, id) {
+      const file = normalizePath(id.split('?')[0] ?? '');
+      if (!/\.[jt]sx?$/.test(file) || !dirs.some(dir => file.startsWith(`${dir}/`))) return null;
+      // Syntax plugins only, so TypeScript and JSX come out as they went in and
+      // the framework's own pipeline still strips types and compiles JSX.
+      const result = await transformAsync(code, {
+        filename: file,
+        babelrc: false,
+        configFile: false,
+        parserOpts: { plugins: ['typescript', 'jsx'] },
+        plugins: [['babel-plugin-react-compiler', {}]],
+        sourceMaps: true,
+      });
+      if (result?.code == null) return null;
+      // THE RUNTIME COMES FROM `react` ITSELF. Compiled code imports
+      // `react/compiler-runtime`, and this framework points `react` at Next's
+      // bundled copy without handling that subpath (in tests its prefix alias
+      // rewrites it to a path inside `index.js`). React 19 exports the same
+      // `c` as `__COMPILER_RUNTIME.c`, and `react` resolves to the right copy
+      // in dev and in tests alike — so the cache hook can never run against a
+      // second React.
+      const compiled = result.code.replace(
+        /import \{ c as (\w+) \} from "react\/compiler-runtime";/,
+        (_, name: string) =>
+          `import { __COMPILER_RUNTIME as __storyboardCompilerRuntime } from "react";\nconst ${name} = __storyboardCompilerRuntime.c;`,
+      );
+      return { code: compiled, map: result.map };
+    },
+  };
+}
 
 const config: StorybookConfig = {
   stories: [
@@ -20,6 +70,7 @@ const config: StorybookConfig = {
   },
   viteFinal: async config => ({
     ...config,
+    plugins: [reactCompilerFor(REACT_COMPILED_DIRS), ...(config.plugins ?? [])],
     resolve: {
       ...config.resolve,
       alias: [

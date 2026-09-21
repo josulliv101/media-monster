@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
+import React, { useEffect, useRef, useSyncExternalStore } from "react";
 import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { flushSync } from "react-dom";
 
@@ -141,7 +141,8 @@ export function Rail({
     );
   }, [railExpanded]);
 
-  const toggleRail = useCallback(() => {
+  // No `useCallback`: the React Compiler memoizes this (see next.config.ts).
+  const toggleRail = () => {
     // THE RAIL'S OWN CREATURE, found inside the rail. A document-wide query
     // returns whichever mark is first in the DOM, and the placeholder page
     // renders a second one — so it was right by layout order rather than by
@@ -154,7 +155,7 @@ export function Rail({
     runRailJump(!railExpanded, mark, (next) =>
       flushSync(() => commitRailExpanded(next)),
     );
-  }, [railExpanded]);
+  };
 
   // z-50, not z-40: the aside is sticky, so it IS a stacking context and every
   // child z-index — the fly-out tooltips' z-50 included — is trapped inside it.
