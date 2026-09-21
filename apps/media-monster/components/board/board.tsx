@@ -18,6 +18,7 @@ import {
 } from "@/lib/engine/bindings";
 import { engine } from "@/lib/engine/engine";
 import { loadFixtureGraph } from "@/lib/engine/fixture-document";
+import { BoardFilmStrip } from "./board-film-strip";
 import { cn } from "@/lib/utils";
 
 /**
@@ -248,6 +249,9 @@ export function Board() {
       ) : null}
       <Toolbar rootId={rootId} />
       <NodeSlot id={rootId} />
+      <div className="mt-6">
+        <BoardFilmStrip />
+      </div>
     </Provider>
   );
 }
