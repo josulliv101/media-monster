@@ -27,11 +27,21 @@
 // or previously-built `dist/` would skip when absent and pass forever — the
 // fail-open shape this package has already been bitten by twice. Building into a
 // temp directory costs about a second and cannot go quiet.
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import ts from "typescript";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
@@ -44,6 +54,73 @@ const PACKAGE_ROOT = fileURLToPath(new URL("../..", import.meta.url));
 let outDir = "";
 let built: Record<string, string> = {};
 const read = (file: string): string => readFileSync(file, "utf8");
+
+function listFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
+    entry.isDirectory() ? listFiles(join(dir, entry.name)) : [join(dir, entry.name)],
+  );
+}
+
+/** `from "./x"`, `export * from "./x"` and `import("./x")` — all three appear in
+ *  emitted declarations, and a rewrite that missed one would pass a test that
+ *  only looked for the first. */
+function relativeSpecifiers(text: string): string[] {
+  return [
+    ...text.matchAll(/from\s*["'](\.[^"']*)["']/g),
+    ...text.matchAll(/import\(\s*["'](\.[^"']*)["']\s*\)/g),
+  ].flatMap((m) => (m[1] === undefined ? [] : [m[1]]));
+}
+
+const CONSUMER = `import { parseNodeId, type NodeId } from "@josulliv101/nested-collections";
+import { createReactBindings } from "@josulliv101/nested-collections/react";
+
+const id: NodeId = parseNodeId("root");
+// @ts-expect-error -- a NodeId is a branded string; accepted only if it became \`any\`
+const wrong: number = parseNodeId("root");
+// @ts-expect-error -- the bindings factory is a function; accepted only if it became \`any\`
+const alsoWrong: number = createReactBindings;
+
+export { id, wrong, alsoWrong };
+`;
+
+/**
+ * Install the build into a throwaway `"type": "module"` project and compile a
+ * consumer of both entries under NodeNext. Returns the diagnostics as text.
+ *
+ * THE PROJECT LIVES INSIDE THE PACKAGE, not in the OS temp dir, so that `react`
+ * and `@types/react` — which the React entry's declarations import — resolve by
+ * walking up to the workspace's `node_modules`, exactly as they would for a
+ * consumer that has React installed. The package itself resolves from the
+ * project's own `node_modules`, which is found first.
+ */
+function typecheckAsNodeNextConsumer(buildDir: string): string[] {
+  const project = mkdtempSync(join(PACKAGE_ROOT, ".nodenext-consumer-"));
+  try {
+    const installed = join(project, "node_modules", "@josulliv101", "nested-collections");
+    mkdirSync(installed, { recursive: true });
+    cpSync(join(PACKAGE_ROOT, "package.json"), join(installed, "package.json"));
+    cpSync(buildDir, join(installed, "dist"), { recursive: true });
+    writeFileSync(join(project, "package.json"), '{ "type": "module" }\n');
+    const entry = join(project, "consumer.ts");
+    writeFileSync(entry, CONSUMER);
+
+    const program = ts.createProgram([entry], {
+      module: ts.ModuleKind.NodeNext,
+      moduleResolution: ts.ModuleResolutionKind.NodeNext,
+      target: ts.ScriptTarget.ES2022,
+      strict: true,
+      noEmit: true,
+      skipLibCheck: false,
+      // No ambient @types scan: only what the consumer imports is loaded.
+      types: [],
+    });
+    return ts
+      .getPreEmitDiagnostics(program)
+      .map((d) => `TS${d.code}: ${ts.flattenDiagnosticMessageText(d.messageText, " ")}`);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
+}
 
 beforeAll(async () => {
   outDir = mkdtempSync(join(tmpdir(), "nc-build-"));
@@ -116,6 +193,40 @@ describe("the build output is publishable", () => {
       expect(extensionless, label).toEqual([]);
     }
   });
+
+  it("emits declarations whose relative imports name real .js paths", () => {
+    // THE DECLARATIONS HAD THE SAME HOLE THE JS WAS BUNDLED TO CLOSE. `tsc`
+    // copies the source's extensionless specifiers (`from "./types"`, where
+    // `./types` is a FOLDER) into every `.d.ts`. Under `"type": "module"` a
+    // NodeNext consumer gets TS2834 on each one — and every export collapses to
+    // `any`, so with `skipLibCheck` the failure is silent. The build now writes
+    // the file each specifier actually resolves to.
+    const declarations = listFiles(join(outDir, "types")).filter((f) => f.endsWith(".d.ts"));
+    expect(declarations.length).toBeGreaterThan(10);
+    const unresolved: string[] = [];
+    for (const file of declarations) {
+      for (const spec of relativeSpecifiers(read(file))) {
+        const target = join(dirname(file), spec.replace(/\.js$/, ".d.ts"));
+        if (!spec.endsWith(".js") || !existsSync(target)) unresolved.push(`${file}: ${spec}`);
+      }
+    }
+    expect(unresolved).toEqual([]);
+  });
+
+  it("typechecks for a NodeNext consumer, with the types intact", () => {
+    // A REAL CONSUMER, not a reading of the files: the built package installed
+    // into a `"type": "module"` project and compiled with `moduleResolution:
+    // "nodenext"` and `skipLibCheck: false`. This repo's own apps all resolve
+    // with `bundler`, which accepts the broken form — so nothing here saw it.
+    //
+    // THE `@ts-expect-error` LINES ARE THE TEETH. Unresolved declarations do not
+    // only report TS2834; they turn every export into `any`, and then a wrong
+    // assignment is accepted. If that happens here the directive has nothing to
+    // suppress and reports itself as unused, so "no diagnostics" means both
+    // that everything resolved AND that the types are still the real ones.
+    const diagnostics = typecheckAsNodeNextConsumer(outDir);
+    expect(diagnostics).toEqual([]);
+  }, 60_000);
 
   it("the manifest points at what the build actually writes", () => {
     // The two halves of publishing that can drift apart: what is emitted, and

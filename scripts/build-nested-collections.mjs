@@ -20,7 +20,8 @@
  *
  *   dist/core/index.js        the engine, bundled, no React anywhere in it
  *   dist/react/index.js       the bindings, bundled, `"use client"` intact
- *   dist/types/**             declarations, mirroring the source layout
+ *   dist/types/**             declarations, mirroring the source layout, with
+ *                             every relative import rewritten to its `.js` path
  *
  * WHY BUNDLE AT ALL, when `tsc` could emit the tree directly: the source imports
  * extensionlessly (`from "../types"`), which `moduleResolution: "bundler"`
@@ -58,8 +59,8 @@
  * OUTPUT — see `the-build-preserves-the-client-directive.test.ts`. Checking the
  * source would prove nothing about either of the two points above.
  */
-import { rmSync, existsSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
@@ -126,6 +127,58 @@ function emitDeclarations(outDir) {
 }
 
 /**
+ * Give every relative import in the emitted declarations the `.js` path Node
+ * resolves it to.
+ *
+ * THE SAME HOLE THE JS IS BUNDLED TO CLOSE, on the types side. `tsc` copies the
+ * source's extensionless specifiers into each `.d.ts` — `from "./types"`, where
+ * `./types` is a FOLDER — and under `"type": "module"` a NodeNext consumer gets
+ * TS2834 on every one. Worse, each unresolved import turns its exports into
+ * `any`, so with `skipLibCheck` the package typechecks and silently has no
+ * types at all.
+ *
+ * REWRITTEN, NOT BUNDLED. A declaration bundle per entry would give `.` and
+ * `./react` each their own copy of `nodeIdBrand` — a `unique symbol` — and two
+ * copies make two incompatible `NodeId` types, so an id from the core could not
+ * be passed to a React hook. Rewriting keeps one declaration of every type.
+ *
+ * Each specifier is resolved against what `tsc` actually wrote: `<path>.d.ts`
+ * becomes `<path>.js`, `<path>/index.d.ts` becomes `<path>/index.js`, and
+ * anything that matches neither FAILS THE BUILD rather than being guessed at.
+ */
+const RELATIVE_SPECIFIER = /(from\s*|import\(\s*)(["'])(\.{1,2}\/[^"']*|\.{1,2})\2/g;
+
+function rewriteDeclarationSpecifiers(typesDir) {
+  const files = [];
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) walk(path);
+      else if (entry.name.endsWith(".d.ts")) files.push(path);
+    }
+  };
+  walk(typesDir);
+
+  for (const file of files) {
+    const text = readFileSync(file, "utf8");
+    const rewritten = text.replace(RELATIVE_SPECIFIER, (match, lead, quote, spec) => {
+      if (spec.endsWith(".js")) return match;
+      const target = resolve(dirname(file), spec);
+      let fixed;
+      if (existsSync(`${target}.d.ts`)) fixed = `${spec}.js`;
+      else if (existsSync(join(target, "index.d.ts"))) fixed = `${spec.replace(/\/$/, "")}/index.js`;
+      else {
+        throw new Error(
+          `declaration ${relative(ROOT, file)} imports "${spec}", which resolves to no emitted .d.ts`,
+        );
+      }
+      return `${lead}${quote}${fixed}${quote}`;
+    });
+    if (rewritten !== text) writeFileSync(file, rewritten);
+  }
+}
+
+/**
  * Build both entries into `outDir`. Returns the paths written, so a caller can
  * assert on them without guessing the layout.
  */
@@ -150,6 +203,7 @@ export async function buildTo(outDir) {
   });
 
   emitDeclarations(outDir);
+  rewriteDeclarationSpecifiers(join(outDir, "types"));
 
   return {
     core: join(outDir, "core", "index.js"),
