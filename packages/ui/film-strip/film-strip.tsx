@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { TvMinimal } from "lucide-react";
 
@@ -211,8 +211,8 @@ export function FilmStrip({
   standalone = true,
   className,
 }: FilmStripProps) {
-  const shots = useMemo(() => placeShots(shotsProp ?? REFERENCE_SHOTS), [shotsProp]);
-  const sections = useMemo(() => placeSections(shots), [shots]);
+  const shots = placeShots(shotsProp ?? REFERENCE_SHOTS);
+  const sections = placeSections(shots);
   const DUR = shots.length === 0 ? 0 : shots[shots.length - 1]!.end;
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
@@ -234,34 +234,34 @@ export function FilmStrip({
   const [ownSelectedId, setOwnSelectedId] = useState<string | null>(null);
   const time = secondsProp ?? ownTime;
   const playing = playingProp ?? ownPlaying;
-  const setTime = useCallback(
-    (next: number | ((current: number) => number)) => {
-      const value =
-        typeof next === "function" ? (next as (current: number) => number)(time) : next;
-      if (secondsProp === undefined) setOwnTime(value);
-      onScrub?.(value);
-    },
-    [onScrub, secondsProp, time],
-  );
-  const setPlaying = useCallback(
-    (next: boolean | ((current: boolean) => boolean)) => {
-      const value =
-        typeof next === "function" ? (next as (current: boolean) => boolean)(playing) : next;
-      if (playingProp === undefined) setOwnPlaying(value);
-      if (value !== playing) onTogglePlay?.();
-    },
-    [onTogglePlay, playing, playingProp],
-  );
+
+  // THE LIVE PLAYHEAD. `time` is the value THIS render saw; a callback that
+  // outlives the render — the playback loop above all — must not build on it.
+  // It did: `setTime(fn)` applied `fn` to the captured `time`, so every frame
+  // of playback computed "start + one frame" and the clock never moved
+  // (measured: `playing` true, 00:00:00 after 1.5s). Updated the moment a new
+  // time is set, and from the prop by the effect below when the caller moves it.
+  const timeRef = useRef(time);
+  const setTime = (next: number | ((current: number) => number)) => {
+    const value =
+      typeof next === "function" ? (next as (current: number) => number)(timeRef.current) : next;
+    timeRef.current = value;
+    if (secondsProp === undefined) setOwnTime(value);
+    onScrub?.(value);
+  };
+  const setPlaying = (next: boolean | ((current: boolean) => boolean)) => {
+    const value =
+      typeof next === "function" ? (next as (current: boolean) => boolean)(playing) : next;
+    if (playingProp === undefined) setOwnPlaying(value);
+    if (value !== playing) onTogglePlay?.();
+  };
   const activeId = selectedId ?? ownSelectedId;
-  const setSelected = useCallback(
-    (index: number) => {
-      const shot = shots[index];
-      if (shot === undefined) return;
-      if (selectedId === undefined) setOwnSelectedId(shot.id);
-      onSelect?.(shot.id);
-    },
-    [onSelect, selectedId, shots],
-  );
+  const setSelected = (index: number) => {
+    const shot = shots[index];
+    if (shot === undefined) return;
+    if (selectedId === undefined) setOwnSelectedId(shot.id);
+    onSelect?.(shot.id);
+  };
   const [trimming, setTrimming] = useState<Trimming | null>(null);
   const trimmingRef = useRef<Trimming | null>(null);
 
@@ -332,7 +332,7 @@ export function FilmStrip({
     };
   }, []);
 
-  const ticks = useMemo(() => {
+  const ticks = (() => {
     const last = Math.min(Math.floor(DUR), tickRange.to);
     const out: React.ReactNode[] = [];
     for (let i = Math.max(0, tickRange.from); i <= last; i += 1) {
@@ -352,12 +352,12 @@ export function FilmStrip({
       );
     }
     return out;
-  }, [DUR, tickRange.from, tickRange.to]);
+  })();
 
 
-  const scrollToSection = useCallback((startSeconds: number) => {
+  const scrollToSection = (startSeconds: number) => {
     viewportRef.current?.scrollTo({ left: startSeconds * PXS - 24, behavior: "smooth" });
-  }, []);
+  };
 
   /**
    * THE SELECTED SHOT IS BROUGHT INTO VIEW.
@@ -477,8 +477,7 @@ export function FilmStrip({
   // re-render per pointer move to move one box is the cost this component
   // avoids everywhere else.
   const skimRef = useRef<HTMLDivElement | null>(null);
-  const timeRef = useRef(time);
-  const placeSkim = useCallback(() => {
+  const placeSkim = () => {
     const card = skimRef.current;
     const viewport = viewportRef.current;
     if (card === null || viewport === null) return;
@@ -511,42 +510,46 @@ export function FilmStrip({
       half + SKIM_EDGE_PX,
       Math.max(half + SKIM_EDGE_PX, window.innerWidth - half - SKIM_EDGE_PX),
     )}px`;
-  }, []);
+  };
 
   useEffect(() => {
     timeRef.current = time;
     placeSkim();
   }, [time, placeSkim, skimPreview]);
 
-  const syncToScroll = useCallback(() => {
-    placeSkim();
-    const viewport = viewportRef.current;
-    const content = contentRef.current;
-    const lane = laneRef.current;
-    const win = windowRef.current;
-    if (viewport === null || content === null) return;
-    const scroll = viewport.scrollLeft;
-
-    // Labels stay pinned to the viewport edge while their section is in view.
-    if (lane !== null) {
-      const labels = lane.querySelectorAll<HTMLElement>(".seclabel");
-      labels.forEach((label, i) => {
-        const section = sections[i];
-        if (section === undefined) return;
-        const min = section.start * PXS + 4;
-        const max = Math.max(min, section.end * PXS - label.offsetWidth - 12);
-        label.style.transform = `translateX(${clamp(scroll + 30, min, max)}px)`;
-      });
-    }
-
-    if (win !== null) {
-      const width = content.offsetWidth;
-      win.style.left = `${(scroll / width) * 100}%`;
-      win.style.width = `${(viewport.clientWidth / width) * 100}%`;
-    }
-  }, [sections, placeSkim]);
-
+  // `syncToScroll` LIVES INSIDE THE EFFECT. As a component-level function the
+  // React Compiler left it uncached, so an effect keyed on it tore down and
+  // re-added the scroll listener — and forced a layout read — on every render,
+  // hover moves included. In here it is keyed on what it actually reads.
   useEffect(() => {
+    const syncToScroll = () => {
+      placeSkim();
+      const viewport = viewportRef.current;
+      const content = contentRef.current;
+      const lane = laneRef.current;
+      const win = windowRef.current;
+      if (viewport === null || content === null) return;
+      const scroll = viewport.scrollLeft;
+
+      // Labels stay pinned to the viewport edge while their section is in view.
+      if (lane !== null) {
+        const labels = lane.querySelectorAll<HTMLElement>(".seclabel");
+        labels.forEach((label, i) => {
+          const section = sections[i];
+          if (section === undefined) return;
+          const min = section.start * PXS + 4;
+          const max = Math.max(min, section.end * PXS - label.offsetWidth - 12);
+          label.style.transform = `translateX(${clamp(scroll + 30, min, max)}px)`;
+        });
+      }
+
+      if (win !== null) {
+        const width = content.offsetWidth;
+        win.style.left = `${(scroll / width) * 100}%`;
+        win.style.width = `${(viewport.clientWidth / width) * 100}%`;
+      }
+    };
+
     syncToScroll();
     const viewport = viewportRef.current;
     if (viewport === null) return;
@@ -560,17 +563,17 @@ export function FilmStrip({
       cancelAnimationFrame(frame);
       viewport.removeEventListener("scroll", onScroll);
     };
-  }, [syncToScroll]);
+  }, [placeSkim, sections]);
 
   /* ── inertia ────────────────────────────────────────────────────────── */
 
-  const cancelMomentum = useCallback(() => {
+  const cancelMomentum = () => {
     const momentum = momentumRef.current;
     if (momentum !== null) cancelAnimationFrame(momentum.raf);
     momentumRef.current = null;
-  }, []);
+  };
 
-  const startMomentum = useCallback((velocity: number) => {
+  const startMomentum = (velocity: number) => {
     if (!willFling(velocity)) return;
     const viewport = viewportRef.current;
     const content = contentRef.current;
@@ -591,7 +594,7 @@ export function FilmStrip({
       state.raf = requestAnimationFrame(step);
     };
     state.raf = requestAnimationFrame(step);
-  }, []);
+  };
 
   useEffect(() => cancelMomentum, [cancelMomentum]);
 
@@ -599,21 +602,18 @@ export function FilmStrip({
 
   // ONE conversion, used by both the seek and the skim, so the card can never
   // describe a different moment from the one the playhead landed on.
-  const secondsAtClientX = useCallback((clientX: number): number | null => {
+  const secondsAtClientX = (clientX: number): number | null => {
     const viewport = viewportRef.current;
     if (viewport === null) return null;
     const box = viewport.getBoundingClientRect();
     return clamp((clientX - box.left + viewport.scrollLeft) / PXS, 0, DUR);
-  }, []);
+  };
 
-  const seekToClientX = useCallback(
-    (clientX: number) => {
+  const seekToClientX = (clientX: number) => {
       const at = secondsAtClientX(clientX);
       if (at === null) return;
       setTime(at);
-    },
-    [secondsAtClientX],
-  );
+    };
 
   /**
    * THE OUT HANDLE (PL15-030).
@@ -797,9 +797,7 @@ export function FilmStrip({
   // BELOW THE DRAG IT READS FROM. The boxes were declared above `cancelMomentum`
   // and the trim state; a memo cannot close over bindings that do not exist yet,
   // and React Compiler says so rather than letting it through.
-  const shotBoxes = useMemo(
-    () =>
-      shots.map((shot, index) => {
+  const shotBoxes = shots.map((shot, index) => {
         const selected = shot.id === activeId;
         // THE PREVIEW LENGTH, this box alone. Its neighbours keep the places
         // they already have until the store answers — see `onTrimOutDown`.
@@ -867,22 +865,15 @@ export function FilmStrip({
             )}
           </div>
         );
-      }),
-    // `activeId` BELONGS IN HERE. The boxes were memoised on `shots` alone
-    // while reading `activeId` inside, so the array was reused across a
-    // selection change and every box kept the mark it had when the memo last
-    // ran. `data-seam-segment-live` was already going stale that way; the
-    // `selected` class would have joined it.
-    [shots, activeId, trimming],
-  );
+      });
 
-  const edgeScroll = useCallback((clientX: number) => {
+  const edgeScroll = (clientX: number) => {
     const viewport = viewportRef.current;
     if (viewport === null) return;
     const box = viewport.getBoundingClientRect();
     if (clientX < box.left + 50) viewport.scrollLeft -= (box.left + 50 - clientX) * 0.35;
     else if (clientX > box.right - 50) viewport.scrollLeft += (clientX - (box.right - 50)) * 0.35;
-  }, []);
+  };
 
   /* ── pointer ────────────────────────────────────────────────────────── */
 

@@ -511,6 +511,20 @@ export function createReactBindings<
   const NodeSlotInner: FunctionComponent<Readonly<{ id: NodeId }>> = ({
     id,
   }) => {
+    // OPTED OUT OF THE REACT COMPILER, for two reasons measured in its output.
+    //
+    // 1. It rewrote `const Sealed = sealedView; <Sealed …/>` to
+    //    `<sealedView …/>` — a lowercase tag, so the JSX transform emits
+    //    `jsx("sealedView")`, an unknown HTML element, and the consumer's
+    //    sealed view never renders. A compiler bug, not a Rules-of-React one.
+    // 2. It cached `nodeViews.get(node.kind)` on `node.kind` alone. The
+    //    registry is module state the compiler assumes is frozen, so a view
+    //    registered late (or re-registered) stopped appearing even after the
+    //    node changed — the documented "until the next render" became "until
+    //    remount".
+    //
+    // Costs nothing: this is already `memo()`'d on `{ id }` below.
+    "use no memo";
     const node = useNode(id);
 
     // Routine, not exceptional: a card can outlive its node by a frame, and a

@@ -1,6 +1,5 @@
 "use client";
 
-import { useMemo } from "react";
 import { documentOrder, getNode, getParent, type NodeId } from "@josulliv101/nested-collections";
 
 import { FilmStrip, LOOKS, type FilmStripShot } from "@storyboard/ui/film-strip";
@@ -65,44 +64,54 @@ const LOOK_CYCLE = [
   "vanPop",
 ].map((name) => LOOKS[name] ?? "");
 
+/**
+ * The board's clips as strip shots, plus a lookup back to engine ids.
+ *
+ * The strip speaks plain strings; the engine takes branded ids. Kept as a
+ * lookup rather than a cast, so an id the strip reports that is not a clip on
+ * this board selects nothing.
+ *
+ * A plain function of the graph and nothing else. It used to sit in a
+ * `useMemo` keyed on `graph`; the React Compiler now caches the call on the
+ * graph's identity, which is the same dependency.
+ */
+function shotsFromGraph(graph: ReturnType<typeof useGraph>) {
+  const out: FilmStripShot[] = [];
+  const ids = new Map<string, NodeId>();
+  for (const id of documentOrder(graph)) {
+    const node = getNode(graph, id);
+    if (node === undefined || node.sealed || node.kind !== "clip") continue;
+    // A clip directly under a root is not in a section; one inside a
+    // collection is labelled with it on the ruler.
+    const parentId = getParent(graph, id);
+    const parent = parentId === null ? undefined : getNode(graph, parentId);
+    const sectionName =
+      parent !== undefined &&
+      !parent.sealed &&
+      parent.kind === "collection" &&
+      !graph.rootIds.includes(parent.id)
+        ? parent.data.name
+        : null;
+    out.push({
+      id,
+      label: node.data.title,
+      seconds: node.data.seconds,
+      frames: framesFor(node.data.media, node.data.seconds) ?? [
+        LOOK_CYCLE[out.length % LOOK_CYCLE.length] ?? "",
+      ],
+      sectionName,
+    });
+    ids.set(id, id);
+  }
+  return { shots: out, clipIds: ids };
+}
+
 export function BoardFilmStrip() {
   const graph = useGraph();
   const anchor = useSelectionAnchor();
   const selection = useSelectionActions();
 
-  // The strip speaks plain strings; the engine takes branded ids. Kept as a
-  // lookup rather than a cast, so an id the strip reports that is not a clip
-  // on this board selects nothing.
-  const { shots, clipIds } = useMemo(() => {
-    const out: FilmStripShot[] = [];
-    const ids = new Map<string, NodeId>();
-    for (const id of documentOrder(graph)) {
-      const node = getNode(graph, id);
-      if (node === undefined || node.sealed || node.kind !== "clip") continue;
-      // A clip directly under a root is not in a section; one inside a
-      // collection is labelled with it on the ruler.
-      const parentId = getParent(graph, id);
-      const parent = parentId === null ? undefined : getNode(graph, parentId);
-      const sectionName =
-        parent !== undefined &&
-        !parent.sealed &&
-        parent.kind === "collection" &&
-        !graph.rootIds.includes(parent.id)
-          ? parent.data.name
-          : null;
-      out.push({
-        id,
-        label: node.data.title,
-        seconds: node.data.seconds,
-        frames: framesFor(node.data.media, node.data.seconds) ?? [
-          LOOK_CYCLE[out.length % LOOK_CYCLE.length] ?? "",
-        ],
-        sectionName,
-      });
-      ids.set(id, id);
-    }
-    return { shots: out, clipIds: ids };
-  }, [graph]);
+  const { shots, clipIds } = shotsFromGraph(graph);
 
   if (shots.length === 0) return null;
 
