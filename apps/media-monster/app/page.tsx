@@ -16,8 +16,10 @@ import { Board } from "@/components/board/board";
  */
 export default function Home() {
   return (
-    <div className="mx-auto max-w-2xl py-10">
-      <h1 className="mb-1 text-lg font-semibold text-zinc-100">First reel</h1>
+    // FULL WIDTH. The shell's <main> already pads the sides; a reel of video
+    // cards wants every column the window can give it.
+    <div className="py-10">
+      <h1 className="mb-1 text-lg font-semibold text-zinc-100">Toon Town</h1>
       <p className="mb-6 text-sm text-zinc-500">
         A fixture document, running on the nested-collections engine. Changes are
         undoable and are lost on reload.

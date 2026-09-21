@@ -5,6 +5,8 @@ import { documentOrder, getNode, getParent, type NodeId } from "@josulliv101/nes
 
 import { FilmStrip, LOOKS, type FilmStripShot } from "@storyboard/ui/film-strip";
 import { useGraph, useSelectionActions, useSelectionAnchor } from "@/lib/engine/bindings";
+import type { ClipMedia } from "@/lib/engine/node-types";
+import { imageUrl, videoFrameUrl } from "@/lib/media/cloudinary";
 
 /**
  * The reel as a film strip: every clip the board can see, end to end, in
@@ -15,16 +17,40 @@ import { useGraph, useSelectionActions, useSelectionAnchor } from "@/lib/engine/
  * selection is the one thing it shares with the board, so a clip picked on
  * either surface is picked on both.
  *
- * NO FOOTAGE YET, so a clip's frame is one of the reference design's
- * gradients, chosen by position so a clip keeps its look while nothing moves.
- * `FilmStripShot.frames` takes any CSS background, so real posters replace
- * this without touching the strip.
+ * REAL FRAMES. A video clip is sampled across its length with Cloudinary frame
+ * grabs, one frame per ~200px of box so a long shot reads as a run of footage
+ * and a short one as its middle. An image clip is its still. A clip with no
+ * media, or media Cloudinary cannot transform, falls back to one of the
+ * reference design's gradients so the box is never blank.
  *
  * AN UNREAD COLLECTION CONTRIBUTES NOTHING. Its clips are not in the graph, and
  * inventing a box for a stored summary would draw footage nobody has read. The
  * strip is the cut as far as it is known — the board's rollup is what says how
  * much is missing.
  */
+/** The strip's own scale (`@storyboard/ui/film-strip`): 44px a second, 150px tall. */
+const PX_PER_SECOND = 44;
+const FRAME = { width: 320, height: 180 } as const;
+const FRAME_SPAN_PX = 200;
+
+const cover = (url: string) => `url("${url}") center / cover no-repeat, #0b0d12`;
+
+function framesFor(media: ClipMedia | null, seconds: number): readonly string[] | null {
+  if (media === null) return null;
+  if (media.kind === "image") {
+    const still = imageUrl(media.src, FRAME);
+    return still === null ? null : [cover(still)];
+  }
+  const count = Math.max(1, Math.round((seconds * PX_PER_SECOND) / FRAME_SPAN_PX));
+  const frames: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const url = videoFrameUrl(media.src, ((i + 0.5) / count) * seconds, FRAME);
+    if (url === null) return null;
+    frames.push(cover(url));
+  }
+  return frames;
+}
+
 // The LIT looks only. The reference's cycle opens on its fade-outs and night
 // plates, which on a strip of placeholder frames read as boxes that failed to
 // load.
@@ -68,7 +94,9 @@ export function BoardFilmStrip() {
         id,
         label: node.data.title,
         seconds: node.data.seconds,
-        frames: [LOOK_CYCLE[out.length % LOOK_CYCLE.length] ?? ""],
+        frames: framesFor(node.data.media, node.data.seconds) ?? [
+          LOOK_CYCLE[out.length % LOOK_CYCLE.length] ?? "",
+        ],
         sectionName,
       });
       ids.set(id, id);

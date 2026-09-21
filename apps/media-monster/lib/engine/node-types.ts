@@ -25,14 +25,39 @@ import {
  * one.
  */
 
+/**
+ * What a clip shows: a video, or a still held for `seconds`.
+ *
+ * A URL and nothing else. Frame grabs, posters and sizes are all derived from
+ * it (see `lib/media/cloudinary.ts`), so there is one fact to store and nothing
+ * that can disagree with it.
+ */
+export type ClipMedia = Readonly<{ kind: "video" | "image"; src: string }>;
+
 /** A piece of footage. `seconds` is what the fold rolls up. */
-export type Clip = Readonly<{ title: string; seconds: number }>;
+export type Clip = Readonly<{ title: string; seconds: number; media: ClipMedia | null }>;
 export type ClipEdit = Readonly<{ title?: string; seconds?: number }>;
+
+function parseMedia(raw: unknown): Result<ClipMedia | null, readonly Issue[]> {
+  if (raw === undefined || raw === null) return { ok: true, value: null };
+  const { kind, src } = raw as Partial<ClipMedia>;
+  if (kind !== "video" && kind !== "image") {
+    return { ok: false, error: [{ path: "$.media.kind", message: "kind must be video or image" }] };
+  }
+  if (typeof src !== "string" || !/^https?:\/\//.test(src)) {
+    return { ok: false, error: [{ path: "$.media.src", message: "src must be an http(s) URL" }] };
+  }
+  return { ok: true, value: { kind, src } };
+}
 
 export const clip = defineNodeType<Clip, ClipEdit>()({
   kind: "clip",
   container: false,
-  schemaVersion: 1,
+  // 2 ADDED `media`. Additive, so the migration is the identity — but bumped
+  // all the same: an older build now SEALS a clip carrying media instead of
+  // reading it, dropping the field and writing it back without it.
+  schemaVersion: 2,
+  migrations: { 2: (raw) => raw },
   parse(raw): Result<Clip, readonly Issue[]> {
     if (typeof raw !== "object" || raw === null) {
       return { ok: false, error: [{ path: "$", message: "not an object" }] };
@@ -55,10 +80,17 @@ export const clip = defineNodeType<Clip, ClipEdit>()({
         error: [{ path: "$.seconds", message: "seconds must be a number >= 0" }],
       };
     }
-    return { ok: true, value: { title: title.trim(), seconds: seconds as number } };
+    const media = parseMedia((raw as { media?: unknown }).media);
+    if (!media.ok) return media;
+    return {
+      ok: true,
+      value: { title: title.trim(), seconds: seconds as number, media: media.value },
+    };
   },
   serialize(data) {
-    return { title: data.title, seconds: data.seconds };
+    return data.media === null
+      ? { title: data.title, seconds: data.seconds }
+      : { title: data.title, seconds: data.seconds, media: { ...data.media } };
   },
   applyEdit(data, edit) {
     return {
@@ -66,6 +98,7 @@ export const clip = defineNodeType<Clip, ClipEdit>()({
       value: {
         title: edit.title ?? data.title,
         seconds: edit.seconds ?? data.seconds,
+        media: data.media,
       },
     };
   },
