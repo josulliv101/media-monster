@@ -3,7 +3,9 @@
 // Split out of the former single-file `commands.ts`; see ./index.ts.
 
 import {
+  describeThrown,
   type GraphNode,
+  type Issue,
   type EngineContext,
   type Graph,
   type NodeId,
@@ -65,7 +67,21 @@ function mintFreshId<S>(
     ctx.maxNodeIdLength === null || id.length <= ctx.maxNodeIdLength;
 
   for (let attempt = 0; attempt < 64; attempt += 1) {
-    const minted = tryParseNodeId(ctx.mintId());
+    // CONSUMER CODE, and it was the one callback this engine called bare, so an
+    // allocator that threw made `dispatch` throw. A throw is not a bad draw
+    // worth retrying — it is an allocator that cannot produce an id — so it is
+    // reported once and the fallback below takes over.
+    let raw: string;
+    try {
+      raw = ctx.mintId();
+    } catch (thrown) {
+      console.error(
+        `nested-collections: EngineConfig.mintId threw. Falling back to the engine's own id for this node.`,
+        thrown,
+      );
+      break;
+    }
+    const minted = tryParseNodeId(raw);
     if (minted.ok && fits(minted.value) && !taken.has(minted.value)) {
       return minted.value;
     }
@@ -97,6 +113,27 @@ function mintFreshId<S>(
  * Reported as `"parse-failed"` because "we could not build this node" is
  * exactly true, and it is the code that carries `issues`.
  */
+function missingSeed<T>(path: string): Result<T, Rejection> {
+  return fail("parse-failed", `There is no seed at ${path}; a seed list cannot have gaps.`, {
+    issues: [{ path, message: "missing seed" }],
+  });
+}
+
+/**
+ * A seed array can have HOLES, and `Seed[]` does not say so: `new Array(2)`
+ * with one slot filled typechecks, and so does a spread of a sparse array.
+ * This used to be skipped with `continue` while its slot was still counted, so
+ * `[ , seed]` inserted at position 0 and recorded position 1 — a patch that
+ * disagreed with the graph it described, which undo then refused. With
+ * `maxDepth` set the depth walk reached the hole first and threw.
+ *
+ * REFUSED, by both walks, because there is no honest position for a seed that
+ * is not there and no honest way to close the gap on the consumer's behalf.
+ */
+function isPresentSeed(value: unknown): boolean {
+  return typeof value === "object" && value !== null;
+}
+
 function cyclicSeed<T>(kind: string): Result<T, Rejection> {
   return fail("parse-failed", "A seed contains itself; the seed tree is cyclic.", {
     kind,
@@ -303,7 +340,9 @@ function tallestSeed<Ts extends readonly WidenedNodeType[], S>(
   // their finished heights — which is how a post-order fold is written without
   // recursion.
   let tallest = 0;
-  for (const root of seeds) {
+  for (let r = 0; r < seeds.length; r += 1) {
+    const root = seeds[r];
+    if (root === undefined || !isPresentSeed(root)) return missingSeed<number>(`$.seeds[${r}]`);
     const stack: Readonly<{ seed: Seed<Ts, S>; expanded: boolean }>[] = [
       { seed: root, expanded: false },
     ];
@@ -345,7 +384,11 @@ function tallestSeed<Ts extends readonly WidenedNodeType[], S>(
 
       onPath.add(seed);
       stack.push({ seed, expanded: true });
-      for (const kid of kids) {
+      for (let k = 0; k < kids.length; k += 1) {
+        const kid = kids[k];
+        if (kid === undefined || !isPresentSeed(kid)) {
+          return missingSeed<number>(`$.children[${k}] of a ${JSON.stringify(seed.kind)} seed`);
+        }
         if (!heightOf.has(kid)) stack.push({ seed: kid, expanded: false });
       }
     }
@@ -373,7 +416,9 @@ function buildSeedPlacements<Ts extends readonly WidenedNodeType[], S>(
   // IS document order.
   for (let i = seeds.length - 1; i >= 0; i -= 1) {
     const seed = seeds[i];
-    if (seed === undefined) continue;
+    if (seed === undefined || !isPresentSeed(seed)) {
+      return missingSeed<readonly Placement<Ts, S>[]>(`$.seeds[${i}]`);
+    }
     stack.push({ seed, parentId: toParentId, index: toIndex + i, ancestors: null });
   }
 
@@ -442,6 +487,36 @@ function buildSeedPlacements<Ts extends readonly WidenedNodeType[], S>(
       );
     }
 
+    // THE SUMMARY TAKES THE SAME DOOR THE DATA DOES. It used to be stored as
+    // handed in, so a summary the summary type rejects went into the graph
+    // looking healthy, saved, and sealed its node on the next load. Checked the
+    // way a stored one is read — `parse(serialize(summary))` — and the parsed
+    // value is what is kept, so a normalizing parse normalizes inserts too.
+    let summary: S | null = null;
+    if (nodeType.container && seed.summary !== undefined && seed.summary !== null) {
+      let checked: Result<S, readonly Issue[]>;
+      try {
+        checked = ctx.summary.parse(ctx.summary.serialize(seed.summary));
+      } catch (thrown) {
+        return fail(
+          "parse-failed",
+          `The summary on a ${JSON.stringify(seed.kind)} seed threw while being checked.`,
+          {
+            kind: seed.kind,
+            issues: [{ path: "$", message: `summary threw: ${describeThrown(thrown)}` }],
+          },
+        );
+      }
+      if (!checked.ok) {
+        return fail(
+          "parse-failed",
+          `The summary on a ${JSON.stringify(seed.kind)} seed failed the summary type's own parse.`,
+          { kind: seed.kind, issues: checked.error },
+        );
+      }
+      summary = checked.value;
+    }
+
     const node: GraphNode<Ts, S> = nodeType.container
       ? makeCollectionNode<Ts, S>(
           nodeId,
@@ -451,7 +526,7 @@ function buildSeedPlacements<Ts extends readonly WidenedNodeType[], S>(
           // supplied its whole content, so "we have not read this yet" is false
           // by construction. Omitted children means loaded-and-empty.
           { status: "loaded" },
-          seed.summary ?? null,
+          summary,
         )
       : makeLeafNode<Ts>(nodeId, seed.kind, parsed.value.data);
 
@@ -516,7 +591,11 @@ function buildSeedPlacements<Ts extends readonly WidenedNodeType[], S>(
       const path: SeedPath<Ts, S> = { seed, parent: ancestors };
       for (let i = seedChildren.length - 1; i >= 0; i -= 1) {
         const child = seedChildren[i];
-        if (child === undefined) continue;
+        if (child === undefined || !isPresentSeed(child)) {
+          return missingSeed<readonly Placement<Ts, S>[]>(
+            `$.children[${i}] of a ${JSON.stringify(seed.kind)} seed`,
+          );
+        }
         stack.push({ seed: child, parentId: nodeId, index: i, ancestors: path });
       }
     }

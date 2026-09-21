@@ -669,6 +669,27 @@ export function createEngine<
       }
     };
 
+    /**
+     * The timestamp for a history entry or a change, and the clock is consumer
+     * code like any listener.
+     *
+     * `undo` and `redo` used to move the stack and THEN read `ctx.now()`, so a
+     * clock that threw escaped a `Result`-returning method with the entry
+     * already consumed and the graph not yet moved. A timestamp describes a
+     * change; it is not the change. Reported and replaced, never thrown.
+     */
+    const stamp = (): number => {
+      try {
+        return ctx.now();
+      } catch (thrown) {
+        console.error(
+          `nested-collections: EngineConfig.now threw. The change went through, stamped with Date.now() instead.`,
+          thrown,
+        );
+        return Date.now();
+      }
+    };
+
     const notifyAll = (
       label: string,
       listeners: ReadonlySet<() => void>,
@@ -988,7 +1009,7 @@ export function createEngine<
         if (!applied.ok) return applied;
 
         const { graph: nextGraph, patch } = applied.value;
-        const at = ctx.now();
+        const at = stamp();
         // Pushed BEFORE anything is notified, so a listener that reads
         // `canUndo()` synchronously sees the entry its own change created.
         history = pushHistory(history, {
@@ -1060,7 +1081,7 @@ export function createEngine<
 
         history = committed.history;
 
-        const at = ctx.now();
+        const at = stamp();
         commitAndEmit(applied.value, "undo", {
           patch: inverse,
           source: "undo",
@@ -1112,7 +1133,7 @@ export function createEngine<
 
         history = committed.history;
 
-        const at = ctx.now();
+        const at = stamp();
         commitAndEmit(applied.value, "redo", {
           patch: forward,
           source: "redo",

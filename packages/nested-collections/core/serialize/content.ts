@@ -283,7 +283,24 @@ function runMigrations(
   }
   targets.sort((a, b) => a - b);
 
-  let data = raw;
+  // A COPY, never the wire value itself. A migration is consumer code and
+  // editing its argument in place is the ordinary way to write one. On the wire
+  // value that did two kinds of damage: a migration that edited and then THREW
+  // sealed the node with `raw` already edited — the "byte-exact" copy a later
+  // build repairs from — and one that edited and succeeded changed the
+  // caller's input document. Only paid when a migration actually runs.
+  let data: unknown;
+  try {
+    data = structuredClone(raw);
+  } catch (thrown) {
+    return {
+      ok: false,
+      error: {
+        path: "$",
+        message: `Could not copy the data for migration: ${describeThrown(thrown)}`,
+      },
+    };
+  }
   for (const target of targets) {
     const migrate = migrations[target];
     if (migrate === undefined) continue;

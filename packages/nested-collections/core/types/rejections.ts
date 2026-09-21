@@ -194,6 +194,13 @@ export type ReplayRejectionCode =
    * Carries `limit`/`actual` for the reason its twin does.
    */
   | "would-exceed-max-depth"
+  /**
+   * Replaying this insert patch would install a node id longer than
+   * `maxNodeIdLength`. The patch came from an engine with a looser ceiling;
+   * accepting it would save a document this engine's `deserialize` refuses.
+   * Mirrors `RejectionCode`'s member of the same name.
+   */
+  | "would-exceed-max-node-id-length"
   /** The store was destroyed. Every mutating call refuses rather than writing
    *  into a graph nothing is listening to — see `Store.destroy`. */
   | "store-destroyed";
