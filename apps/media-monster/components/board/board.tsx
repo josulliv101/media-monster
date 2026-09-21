@@ -17,7 +17,7 @@ import {
   useSelectionActions,
 } from "@/lib/engine/bindings";
 import { engine } from "@/lib/engine/engine";
-import { loadFixtureGraph } from "@/lib/engine/fixture-document";
+import { FIXTURE_ROOT_ID, loadFixtureGraph } from "@/lib/engine/fixture-document";
 import { BoardFilmStrip } from "./board-film-strip";
 import { imageUrl, videoFrameUrl } from "@/lib/media/cloudinary";
 import type { ClipMedia, NodeTypes } from "@/lib/engine/node-types";
@@ -293,7 +293,7 @@ export function Board() {
     const { graph, report } = loadFixtureGraph();
     return { store: engine.createStore(graph), sealed: report.sealed };
   });
-  const rootId = parseNodeId("reel");
+  const rootId = parseNodeId(FIXTURE_ROOT_ID);
 
   return (
     <Provider store={store}>
