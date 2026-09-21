@@ -20,7 +20,8 @@ import { engine } from "@/lib/engine/engine";
 import { loadFixtureGraph } from "@/lib/engine/fixture-document";
 import { BoardFilmStrip } from "./board-film-strip";
 import { imageUrl, videoFrameUrl } from "@/lib/media/cloudinary";
-import type { ClipMedia } from "@/lib/engine/node-types";
+import type { ClipMedia, NodeTypes } from "@/lib/engine/node-types";
+import type { NodeViewProps } from "@josulliv101/nested-collections/react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -137,7 +138,13 @@ function ClipPicture({ media, seconds }: Readonly<{ media: ClipMedia | null; sec
   );
 }
 
-defineNodeView("clip", function ClipCard({ id, data }) {
+/**
+ * DECLARED, THEN REGISTERED — not written inline in the `defineNodeView` call.
+ * The React Compiler only recognises a component it can see as one: a
+ * function expression passed as an argument is skipped, and these two are the
+ * most-rendered components on the page.
+ */
+function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
   const selected = useIsSelected(id);
   const selection = useSelectionActions();
   return (
@@ -161,9 +168,11 @@ defineNodeView("clip", function ClipCard({ id, data }) {
       </span>
     </button>
   );
-});
+}
 
-defineNodeView("collection", function CollectionCard({ id, data }) {
+defineNodeView("clip", ClipCard);
+
+function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   const node = useNode(id);
   const children = useChildren(id);
   const total = useFold("seconds", id);
@@ -249,7 +258,9 @@ defineNodeView("collection", function CollectionCard({ id, data }) {
       </div>
     </section>
   );
-});
+}
+
+defineNodeView("collection", CollectionCard);
 
 function Toolbar({ rootId }: Readonly<{ rootId: ReturnType<typeof parseNodeId> }>) {
   const { canUndo, canRedo, undo, redo } = useHistory();

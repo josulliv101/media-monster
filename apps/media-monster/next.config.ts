@@ -62,6 +62,19 @@ const nextConfig: NextConfig = {
   transpilePackages: ["@josulliv101/nested-collections", "@storyboard/ui"],
   reactStrictMode: true,
   /**
+   * THE REACT COMPILER, on for the whole app.
+   *
+   * It memoizes components and hooks at build time, so the app does not
+   * hand-write `useMemo`/`useCallback`/`memo` for ordinary values — new code
+   * here should not add them without a measured reason. A component that breaks
+   * the Rules of React is skipped rather than miscompiled, so the failure mode
+   * is "not optimized", never "wrong".
+   *
+   * Default `infer` mode: components and hooks are compiled, plain functions
+   * are not.
+   */
+  reactCompiler: true,
+  /**
    * DEV AND BUILD GET SEPARATE DIRECTORIES.
    *
    * They shared `.next` until now, which is the default and is wrong for a
