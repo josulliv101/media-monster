@@ -524,6 +524,17 @@ function verifyInserted<Ts extends readonly WidenedNodeType[], S>(
         { nodeId: node.id },
       );
     }
+    // THE ID CEILING, the third replay twin. The minting door holds new ids to
+    // `maxNodeIdLength`; a patch built by an engine with a looser ceiling (or
+    // none) arrives here with its ids already chosen, and installing one past
+    // this engine's ceiling saves a document `deserialize` refuses.
+    if (ctx.maxNodeIdLength !== null && node.id.length > ctx.maxNodeIdLength) {
+      return replayError(
+        "would-exceed-max-node-id-length",
+        `Node id ${node.id.slice(0, 64)} is ${node.id.length} characters, past the ${ctx.maxNodeIdLength} ceiling.`,
+        { nodeId: node.id, limit: ctx.maxNodeIdLength, actual: node.id.length },
+      );
+    }
     // The parent is either already in the graph, or an EARLIER placement in
     // this same patch — document order, parents first, is what makes that true.
     const parentIsNew = willExist.has(parentId);
