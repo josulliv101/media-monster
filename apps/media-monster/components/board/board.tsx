@@ -19,6 +19,8 @@ import {
 import { engine } from "@/lib/engine/engine";
 import { loadFixtureGraph } from "@/lib/engine/fixture-document";
 import { BoardFilmStrip } from "./board-film-strip";
+import { imageUrl, videoFrameUrl } from "@/lib/media/cloudinary";
+import type { ClipMedia } from "@/lib/engine/node-types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -93,6 +95,48 @@ function Duration({
   );
 }
 
+const THUMB = { width: 480, height: 270 } as const;
+
+/**
+ * The picture on a clip card: the VIDEO itself for a video clip, playing muted
+ * while the pointer is over it, and the still for an image clip.
+ *
+ * `preload="none"` with a Cloudinary frame grab as the poster, so a board of
+ * forty cards costs forty small jpegs until someone hovers — not forty video
+ * downloads. The poster is taken a third of a second in, past the black first
+ * frame many generated clips open on.
+ */
+function ClipPicture({ media, seconds }: Readonly<{ media: ClipMedia | null; seconds: number }>) {
+  const frame = "aspect-video w-full bg-zinc-900 object-cover";
+  if (media === null) {
+    return (
+      <div className={cn(frame, "grid place-items-center text-xs text-zinc-600")}>No media</div>
+    );
+  }
+  if (media.kind === "image") {
+    // eslint-disable-next-line @next/next/no-img-element -- a Cloudinary transform is already the optimised image
+    return <img src={imageUrl(media.src, THUMB) ?? media.src} alt="" className={frame} />;
+  }
+  return (
+    <video
+      src={media.src}
+      poster={videoFrameUrl(media.src, Math.min(0.35, seconds / 2), THUMB) ?? undefined}
+      muted
+      loop
+      playsInline
+      preload="none"
+      className={frame}
+      onPointerEnter={(event) => {
+        void event.currentTarget.play().catch(() => undefined);
+      }}
+      onPointerLeave={(event) => {
+        event.currentTarget.pause();
+        event.currentTarget.currentTime = 0;
+      }}
+    />
+  );
+}
+
 defineNodeView("clip", function ClipCard({ id, data }) {
   const selected = useIsSelected(id);
   const selection = useSelectionActions();
@@ -102,15 +146,18 @@ defineNodeView("clip", function ClipCard({ id, data }) {
       aria-pressed={selected}
       onClick={() => selection.toggle(id)}
       className={cn(
-        "flex w-full items-baseline justify-between gap-4 rounded-lg border px-3 py-2 text-left transition-colors",
+        "flex w-full flex-col overflow-hidden rounded-lg border text-left transition-colors",
         selected
           ? "border-sky-400/60 bg-sky-400/10 text-zinc-50"
           : "border-zinc-800 bg-zinc-900/40 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-900",
       )}
     >
-      <span className="min-w-0 truncate text-sm">{data.title}</span>
-      <span className="shrink-0 text-xs tabular-nums text-zinc-500">
-        {formatSeconds(data.seconds)}
+      <ClipPicture media={data.media} seconds={data.seconds} />
+      <span className="flex items-baseline justify-between gap-3 px-3 py-2">
+        <span className="min-w-0 truncate text-sm">{data.title}</span>
+        <span className="shrink-0 text-xs tabular-nums text-zinc-500">
+          {formatSeconds(data.seconds)}
+        </span>
       </span>
     </button>
   );
@@ -145,7 +192,7 @@ defineNodeView("collection", function CollectionCard({ id, data }) {
       type: "insert-nodes",
       toParentId: id,
       toIndex: children.length,
-      seeds: [{ kind: "clip", data: { title: "Untitled clip", seconds: 3 } }],
+      seeds: [{ kind: "clip", data: { title: "Untitled clip", seconds: 3, media: null } }],
     });
     // EVERY FAILURE IS A TYPED RESULT, never a throw — so a refusal has to be
     // read to be noticed. Inserting into an unread collection is refused with
@@ -156,7 +203,9 @@ defineNodeView("collection", function CollectionCard({ id, data }) {
   };
 
   return (
-    <section className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+    // `col-span-full`: a collection nested in another sits in its parent's grid
+    // of clip cards, and takes a whole row rather than one card's column.
+    <section className="col-span-full rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
       <header className="mb-2 flex items-baseline justify-between gap-3">
         <h3 className="truncate text-sm font-semibold text-zinc-100">
           {data.name}
@@ -177,7 +226,7 @@ defineNodeView("collection", function CollectionCard({ id, data }) {
       ) : children.length === 0 ? (
         <p className="px-1 py-2 text-xs text-zinc-600">Empty.</p>
       ) : (
-        <div className="flex flex-col gap-2">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-3">
           {children.map((childId) => (
             <NodeSlot key={childId} id={childId} />
           ))}
