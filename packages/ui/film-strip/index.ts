@@ -13,7 +13,12 @@
  * was the reference design both the strip and the app's clip deck came from,
  * and only the strip lives in this package.
  */
-export { FilmStrip, type FilmStripProps, type FilmStripSkimPreview } from "./film-strip";
+export {
+  FilmStrip,
+  type FilmStripProps,
+  type FilmStripSize,
+  type FilmStripSkimPreview,
+} from "./film-strip";
 export {
   placeSections,
   placeShots,

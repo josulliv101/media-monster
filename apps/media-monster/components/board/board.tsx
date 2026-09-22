@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { parseNodeId } from "@josulliv101/nested-collections";
 import { Redo2, Undo2 } from "lucide-react";
 
@@ -24,6 +24,11 @@ import {
   readUnreadChildren,
 } from "@/lib/engine/fixture-document";
 import { BoardFilmStrip } from "./board-film-strip";
+import type { FilmStripSize } from "@storyboard/ui/film-strip";
+import {
+  readFilmStripSize,
+  subscribeFilmStripSize,
+} from "@/components/settings/film-strip-size-store";
 import { imageUrl, videoFrameUrl } from "@/lib/media/cloudinary";
 import type { ClipMedia, NodeTypes } from "@/lib/engine/node-types";
 import type { NodeViewProps } from "@josulliv101/nested-collections/react";
@@ -318,7 +323,18 @@ function Toolbar({ rootId }: Readonly<{ rootId: ReturnType<typeof parseNodeId> }
   );
 }
 
-export function Board() {
+export function Board({
+  initialFilmStripSize = "default",
+}: Readonly<{
+  /** What the server rendered the strip at, from the cookie. The settings
+   *  dialog changes it live; this only makes the first paint agree. */
+  initialFilmStripSize?: FilmStripSize;
+}> = {}) {
+  const filmStripSize = useSyncExternalStore(
+    subscribeFilmStripSize,
+    readFilmStripSize,
+    () => initialFilmStripSize,
+  );
   // ONE STORE FOR THE LIFE OF THE MOUNT. Built in a lazy initializer rather than
   // at module scope so React Strict Mode's double render does not build two, and
   // so a future document id can key it. `loadFixtureGraph` throws on a fixture
@@ -350,7 +366,7 @@ export function Board() {
           settles into its own spot at the end of the board. The background is
           the page's, so cards scrolling under it do not show through. */}
       <div className="sticky bottom-0 z-40 mt-6 bg-zinc-950 pt-3 pb-4">
-        <BoardFilmStrip />
+        <BoardFilmStrip size={filmStripSize} />
       </div>
     </Provider>
   );
