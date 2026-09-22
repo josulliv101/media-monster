@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { PanelLeftClose, PanelLeftOpen, Settings } from "lucide-react";
+import Link from "next/link";
+import { Menu, PanelLeftClose, PanelLeftOpen, Settings } from "lucide-react";
 import { flushSync } from "react-dom";
 
 import { runRailJump } from "@/components/shell/rail-jump";
@@ -28,6 +29,7 @@ import {
   RailTooltipLabel,
 } from "@/components/shell/rail-tooltip-label";
 import { RailWordmark } from "@/components/shell/rail-wordmark";
+import { MediaMonsterMark } from "@/components/brand/media-monster-mark";
 import { SettingsDialog } from "@/components/settings/settings-dialog";
 import { cn } from "@/lib/utils";
 
@@ -51,6 +53,30 @@ import { cn } from "@/lib/utils";
  * lockup, `rail-jump.ts` choreographs the creature's flight, and
  * `rail-preference-store.ts` owns the cookie and localStorage.
  */
+
+/**
+ * THE NARROW-SCREEN BREAKPOINT, read as a store rather than in an effect.
+ *
+ * Matches Tailwind's `md`, so the class variants below and this hook cannot
+ * disagree about where the rail stops being a column and becomes a drawer.
+ *
+ * `useSyncExternalStore` for the reason the rail's own preference uses one: a
+ * `useState` corrected by a mount effect is a cascading render, and it paints
+ * the wrong thing first. The SERVER snapshot is `false` — a server has no
+ * viewport, and the drawer is off-screen until it is opened, so a narrow phone
+ * correcting this on hydration moves nothing anybody can see.
+ */
+const NARROW = "(max-width: 767px)";
+
+function subscribeNarrow(onChange: () => void): () => void {
+  const query = window.matchMedia(NARROW);
+  query.addEventListener("change", onChange);
+  return () => query.removeEventListener("change", onChange);
+}
+
+function readNarrow(): boolean {
+  return window.matchMedia(NARROW).matches;
+}
 
 /**
  * After a POINTER press on a rail tile, keep that tile's tooltip shut until the
@@ -109,6 +135,18 @@ export function Rail({
   const railRef = useRef<HTMLElement>(null);
   const settingsRef = useRef<HTMLDialogElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const narrow = useSyncExternalStore(subscribeNarrow, readNarrow, () => false);
+  // THE DRAWER, on narrow screens only. There is no room for a permanent column
+  // beside the board on a phone, so the rail slides in over it from a button in
+  // the top bar. Closed on every load: a drawer that opened itself would cover
+  // the thing it was opened to navigate to.
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  // A WIDENED WINDOW IS NOT AN OPEN DRAWER. Left set, the flag would keep the
+  // scroll lock alive behind a rail that is a column again, and re-open the
+  // drawer if the window narrowed later. Cleared DURING RENDER, React's pattern
+  // for state that follows a changed input — in an effect it is a cascading
+  // render, which the React Compiler's lint refuses outright.
+  if (!narrow && drawerOpen) setDrawerOpen(false);
 
   const openSettings = () => {
     setSettingsOpen(true);
@@ -134,6 +172,10 @@ export function Rail({
     () => initialRailExpanded,
   );
 
+  // The drawer is the only thing wide enough to caption its tiles, so it always
+  // shows labels; the column follows the width preference.
+  const labelsInline = narrow ? true : railExpanded;
+
   useEffect(() => {
     // The offset every surface beside the rail reads. Written on the document
     // rather than the aside because those surfaces are its SIBLINGS, not its
@@ -148,6 +190,29 @@ export function Rail({
       `${railExpanded ? RAIL_OPEN_WIDTH_PX : RAIL_WIDTH_PX}px`,
     );
   }, [railExpanded]);
+
+  // ESCAPE CLOSES THE DRAWER, and the board behind it does not scroll while it
+  // is open — both are what makes an overlay feel like one surface rather than
+  // two stacked ones. Bound only while it is open, so nothing listens for a key
+  // it cannot act on.
+  //
+  // THE LOCK IS A CLASS, NOT `body.style.overflow`, and the stylesheet gates it
+  // on the same breakpoint as the drawer (see `globals.css`). CSS re-evaluates
+  // a media query whatever JavaScript believes, so a window widened while the
+  // drawer is open cannot leave the page unscrollable behind a rail that is a
+  // column again — the one failure here that would strand somebody.
+  useEffect(() => {
+    if (!drawerOpen) return undefined;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setDrawerOpen(false);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.documentElement.classList.add("rail-drawer-open");
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.documentElement.classList.remove("rail-drawer-open");
+    };
+  }, [drawerOpen]);
 
   // No `useCallback`: the React Compiler memoizes this (see next.config.ts).
   const toggleRail = () => {
@@ -175,9 +240,10 @@ export function Rail({
     // Geometry is done with descendant variants off `RAIL_CLASS` so the tile
     // call sites stay untouched; this carries the ONE thing CSS cannot — that an
     // always-visible label is not a `role="tooltip"`.
-    <RailLabelsInlineContext.Provider value={railExpanded}>
+    <RailLabelsInlineContext.Provider value={labelsInline}>
       <aside
         ref={railRef}
+        id="rail"
         data-rail-expanded={railExpanded}
         onClickCapture={suppressTipUntilPointerReturns}
         // No horizontal padding and `items-stretch`: the tiles ARE the rail's
@@ -193,6 +259,21 @@ export function Rail({
           // when the width does. See the note on RAIL_CLASS.
           RAIL_CLASS,
           "sticky top-0 z-50 flex h-screen shrink-0 flex-col items-stretch gap-0 overflow-visible border-r border-zinc-800 bg-zinc-900/50 pt-1.5 pb-5 backdrop-blur-md",
+          // NARROW: out of the flow entirely and parked off the left edge, so
+          // `main` gets the whole width and the drawer slides over it. `fixed`
+          // rather than `sticky`, because a sticky element still takes its slot
+          // in the flex row and would hold a 72px gutter open on a phone.
+          // The DRAWER SLIDES, it does not grow: `transition-[width]` below is
+          // the column's move between 72px and 240px, and on a phone the rail
+          // is one width and travels instead. Animating width here would also
+          // leave it at the pre-transition width for anything that measures
+          // before the animation runs.
+          "max-md:fixed max-md:inset-y-0 max-md:left-0 max-md:z-50 max-md:h-dvh max-md:shadow-2xl max-md:transition-transform",
+          narrow
+            ? drawerOpen
+              ? "max-md:translate-x-0"
+              : "max-md:-translate-x-full"
+            : null,
           // Width alone is animated. `transition-all` here would also catch the
           // backdrop filter, which is expensive to interpolate over a sticky
           // full-height surface.
@@ -202,7 +283,11 @@ export function Rail({
           // easing from the AFTER-change style, so whichever branch below is
           // being switched TO is the one that times the move — which is what
           // makes this direction-aware without a line of JavaScript.
-          railExpanded
+          // The drawer is always at the open width: it is covering the board
+          // either way, so a 72px strip of icons would be smaller for no gain.
+          narrow
+            ? `${RAIL_WIDTH_CLASS.open} ${RAIL_OPEN_CLASS} max-md:duration-200 max-md:ease-out`
+            : railExpanded
             ? // OPENING: the rail arrives exactly as the creature lands, because
               // it travels on the creature's own profile.
               //
@@ -238,7 +323,7 @@ export function Rail({
               `${RAIL_WIDTH_CLASS.collapsed} duration-[680ms] ease-[cubic-bezier(0.6,0.04,0.3,1)]`,
         )}
       >
-        <RailWordmark expanded={railExpanded} />
+        <RailWordmark expanded={labelsInline} />
 
         {/* THE RAIL'S OWN WIDTH CONTROL, beneath settings.
 
@@ -282,7 +367,9 @@ export function Rail({
             aria-describedby="rail-tooltip-width"
             data-rail-toggle={railExpanded ? "expanded" : "collapsed"}
             onClick={toggleRail}
-            className={cn(RAIL_TILE_BASE, RAIL_TILE_IDLE)}
+            // Not on a phone: the drawer has one width, and a control that
+            // preferred a narrower one would do nothing you could see.
+            className={cn(RAIL_TILE_BASE, RAIL_TILE_IDLE, "max-md:hidden")}
           >
             {railExpanded ? (
               <PanelLeftClose className={RAIL_GLYPH} />
@@ -297,6 +384,51 @@ export function Rail({
           </button>
         </div>
       </aside>
+
+      {/* THE TOP BAR, narrow screens only: what opens the drawer, and where the
+          creature lives while the rail is off-screen. There IS room for it —
+          the lockup is ~150px of a 360px bar — and it is the one piece of the
+          rail worth keeping in sight, so the app still looks like itself with
+          the rail away. */}
+      <header className="fixed inset-x-0 top-0 z-40 flex h-14 items-center gap-2 border-b border-zinc-800 bg-zinc-950/90 px-3 backdrop-blur-md md:hidden">
+        <button
+          type="button"
+          aria-label="Open menu"
+          aria-expanded={drawerOpen}
+          aria-controls="rail"
+          data-rail-menu
+          onClick={() => setDrawerOpen(true)}
+          className="rounded-md p-2 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white focus-visible:outline-2 focus-visible:outline-sky-500"
+        >
+          <Menu className="size-5" />
+        </button>
+        {/* The rail's lockup, STATIC. `RailWordmark` is the animated one: its
+            letters grow out of the creature as the rail opens, against a 72px
+            row. Nothing here opens or closes, so the word is simply written. */}
+        <Link
+          href="/"
+          aria-label="Media Monster home"
+          className="flex items-center font-[family-name:var(--font-grandstander)] text-[17px] font-bold whitespace-nowrap text-white transition-colors hover:text-zinc-300"
+        >
+          <span>media m</span>
+          <MediaMonsterMark scale={0.97} />
+          <span>nster</span>
+        </Link>
+      </header>
+
+      {/* The board behind the open drawer. Closes it, and takes the taps that
+          would otherwise land on cards under the overlay. */}
+      {drawerOpen ? (
+        <div
+          data-rail-backdrop
+          aria-hidden="true"
+          onClick={() => setDrawerOpen(false)}
+          // `md:hidden` rather than a `narrow &&` in the condition: the
+          // breakpoint belongs to CSS, which cannot be out of date.
+          className="fixed inset-0 z-40 bg-black/60 backdrop-blur-[1px] md:hidden"
+        />
+      ) : null}
+
       {/* Outside the aside: the rail is sticky and z-50, and a modal opened
           with showModal() is in the top layer anyway, but keeping it out of
           the rail's subtree keeps the rail's click handling off it. */}

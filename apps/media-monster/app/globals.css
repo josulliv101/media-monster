@@ -173,3 +173,14 @@ html body[data-scroll-locked] {
   padding-right: 0 !important;
 }
 
+/* THE DRAWER'S SCROLL LOCK, gated on the rail's own breakpoint.
+   `rail.tsx` adds `.rail-drawer-open` while the narrow-screen drawer is open.
+   Holding the lock HERE rather than as an inline style is what makes a window
+   widened mid-drawer safe: the rail becomes a column by media query, and this
+   stops applying by the same media query, with no JavaScript in the path. */
+@media (max-width: 767px) {
+  html.rail-drawer-open,
+  html.rail-drawer-open body {
+    overflow: hidden;
+  }
+}
