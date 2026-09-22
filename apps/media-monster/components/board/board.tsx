@@ -456,9 +456,29 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
             ) : null}
           </button>
         </h3>
+        {/* GO TO: make this collection the top of the board. Its own button
+            beside the duration rather than part of the bar, because the bar
+            already means "open or close", and a click cannot mean both. Not on
+            the collection that is already the top — there is nowhere to go. */}
+        {isRoot ? null : (
+          <button
+            type="button"
+            aria-label={`Go to ${data.name}`}
+            title={`Go to ${data.name}: show it, and everything inside it, on its own`}
+            data-collection-focus
+            onClick={() => focus(id)}
+            className="flex shrink-0 items-center rounded-lg px-2 text-zinc-500 transition-colors hover:bg-zinc-800/60 hover:text-zinc-100 focus-visible:bg-zinc-800/60 focus-visible:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500"
+          >
+            <Focus className="size-4" aria-hidden="true" />
+          </button>
+        )}
         {/* IN THE CUT OR NOT, for this whole branch. Its own control beside
             the bar, for the reason "go to" is: the bar means open or close.
-            Disabled, and shown off, while a row above is off. */}
+            Disabled, and shown off, while a row above is off.
+
+            LAST IN THE ROW, so every switch sits against its box's right edge.
+            Before "go to" it was pushed left by that icon on every row but the
+            top one, which has no icon — a 49px stagger down the right side. */}
         <button
           type="button"
           role="switch"
@@ -478,22 +498,6 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
         >
           <SwitchTrack on={on} />
         </button>
-        {/* GO TO: make this collection the top of the board. Its own button
-            beside the duration rather than part of the bar, because the bar
-            already means "open or close", and a click cannot mean both. Not on
-            the collection that is already the top — there is nowhere to go. */}
-        {isRoot ? null : (
-          <button
-            type="button"
-            aria-label={`Go to ${data.name}`}
-            title={`Go to ${data.name}: show it, and everything inside it, on its own`}
-            data-collection-focus
-            onClick={() => focus(id)}
-            className="flex shrink-0 items-center rounded-lg px-2 text-zinc-500 transition-colors hover:bg-zinc-800/60 hover:text-zinc-100 focus-visible:bg-zinc-800/60 focus-visible:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500"
-          >
-            <Focus className="size-4" aria-hidden="true" />
-          </button>
-        )}
       </header>
 
       {/* Always in the DOM so `aria-controls` names something; its contents
