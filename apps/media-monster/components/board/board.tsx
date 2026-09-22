@@ -1,7 +1,7 @@
 "use client";
 
-import { useId, useState, useSyncExternalStore } from "react";
-import { parseNodeId } from "@josulliv101/nested-collections";
+import { createContext, use, useId, useState, useSyncExternalStore } from "react";
+import { getNode, parseNodeId } from "@josulliv101/nested-collections";
 import { Redo2, Undo2 } from "lucide-react";
 
 import {
@@ -11,6 +11,7 @@ import {
   useChildren,
   useDispatch,
   useFold,
+  useGraph,
   useHistory,
   useIsSelected,
   useNode,
@@ -29,6 +30,11 @@ import {
   readFilmStripSize,
   subscribeFilmStripSize,
 } from "@/components/settings/film-strip-size-store";
+import {
+  readBoardLayout,
+  subscribeBoardLayout,
+} from "@/components/settings/board-layout-store";
+import type { BoardLayout } from "@/components/settings/board-layout-preference";
 import { imageUrl, videoFrameUrl } from "@/lib/media/cloudinary";
 import type { ClipMedia, NodeTypes } from "@/lib/engine/node-types";
 import type { NodeViewProps } from "@josulliv101/nested-collections/react";
@@ -154,6 +160,20 @@ function ClipPicture({ media, seconds }: Readonly<{ media: ClipMedia | null; sec
  * function expression passed as an argument is skipped, and these two are the
  * most-rendered components on the page.
  */
+/**
+ * HOW THE BOARD LAYS CLIPS OUT, as context rather than a prop.
+ *
+ * A view registered with `defineNodeView` is rendered by the engine's
+ * `NodeSlot`, which hands it a node and nothing else — there is no call site to
+ * pass this down through. Context is the seam that exists for exactly that, and
+ * the value changes about as often as somebody opens the settings dialog.
+ */
+const BoardLayoutContext = createContext<BoardLayout>("grid");
+
+/** A clip card's width in a row, where the grid's `1fr` has no meaning: the
+ *  cards run off the edge instead of sharing the width. */
+const ROW_CARD_WIDTH = "w-56";
+
 function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
   const selected = useIsSelected(id);
   const selection = useSelectionActions();
@@ -244,6 +264,8 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
 function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   const node = useNode(id);
   const children = useChildren(id);
+  const graph = useGraph();
+  const layout = use(BoardLayoutContext);
   const total = useFold("seconds", id);
   const dispatch = useDispatch();
   const store = useStore();
@@ -271,6 +293,15 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
     node === undefined ? null : node.sealed || node.container ? node.children : null;
   const loadState = childrenState?.status ?? "loaded";
   const unread = loadState === "unloaded" || loadState === "reference";
+
+  // Split once, read by the row layout below. A sealed child's kind came off
+  // the wire and cannot be trusted to name a view, so it is grouped with the
+  // clips — it draws as a card either way.
+  const clipIds = children.filter((childId) => {
+    const child = getNode(graph, childId);
+    return child === undefined || child.sealed || child.kind !== "collection";
+  });
+  const collectionIds = children.filter((childId) => !clipIds.includes(childId));
   const summarized = total?.certainty === "estimated";
 
   // OPENING READS IT. `store.load` is IO landing: no patch, no history entry,
@@ -379,6 +410,33 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
               <p className="px-1 py-2 text-xs text-zinc-500">Gone from storage.</p>
             ) : children.length === 0 ? (
               <p className="px-1 py-2 text-xs text-zinc-600">Empty.</p>
+            ) : layout === "row" ? (
+              // ONE ROW THAT RUNS OFF THE EDGE, scrolled sideways, the way the
+              // film strip reads the reel. A collection's height then stops
+              // depending on how much it holds, which is what makes a document
+              // this deep scannable by scrolling the page.
+              //
+              // NESTED COLLECTIONS STAY STACKED, below the clips: a folder is
+              // not a card, and a horizontal scroller full of folders hides the
+              // thing you opened the folder to see. So the children are split
+              // by kind here — the only place that distinction matters.
+              <div className="grid gap-2">
+                {clipIds.length === 0 ? null : (
+                  <div
+                    data-board-row
+                    className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:thin] md:gap-3"
+                  >
+                    {clipIds.map((childId) => (
+                      <div key={childId} className={cn(ROW_CARD_WIDTH, "shrink-0")}>
+                        <NodeSlot id={childId} />
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {collectionIds.map((childId) => (
+                  <NodeSlot key={childId} id={childId} />
+                ))}
+              </div>
             ) : (
               <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-2 md:gap-3">
                 {children.map((childId) => (
@@ -461,15 +519,23 @@ function Toolbar({ rootId }: Readonly<{ rootId: ReturnType<typeof parseNodeId> }
 
 export function Board({
   initialFilmStripSize = "default",
+  initialBoardLayout = "grid",
 }: Readonly<{
   /** What the server rendered the strip at, from the cookie. The settings
    *  dialog changes it live; this only makes the first paint agree. */
   initialFilmStripSize?: FilmStripSize;
+  /** The same, for how the board lays clips out. */
+  initialBoardLayout?: BoardLayout;
 }> = {}) {
   const filmStripSize = useSyncExternalStore(
     subscribeFilmStripSize,
     readFilmStripSize,
     () => initialFilmStripSize,
+  );
+  const boardLayout = useSyncExternalStore(
+    subscribeBoardLayout,
+    readBoardLayout,
+    () => initialBoardLayout,
   );
   // ONE STORE FOR THE LIFE OF THE MOUNT. Built in a lazy initializer rather than
   // at module scope so React Strict Mode's double render does not build two, and
@@ -492,6 +558,7 @@ export function Board({
 
   return (
     <Provider store={store}>
+      {/* The layout every collection below reads; see `BoardLayoutContext`. */}
       {/* SEALING IS A SUCCESS PATH, so `ok: true` alone would have said nothing.
           A node whose kind this app does not know keeps its bytes and stays
           movable, and the board simply renders fewer cards than the document
@@ -503,7 +570,9 @@ export function Board({
         </p>
       ) : null}
       <Toolbar rootId={rootId} />
-      <NodeSlot id={rootId} />
+      <BoardLayoutContext value={boardLayout}>
+        <NodeSlot id={rootId} />
+      </BoardLayoutContext>
       {/* PINNED TO THE BOTTOM OF THE VIEWPORT. The strip is the reel's timeline,
           so it stays in reach while the board scrolls above it. `sticky` rather
           than `fixed`: it keeps its place in the page's width (beside the rail,

@@ -5,6 +5,10 @@ import {
   FILM_STRIP_SIZE_COOKIE,
   filmStripSizeFromValue,
 } from "@/components/settings/film-strip-size-preference";
+import {
+  BOARD_LAYOUT_COOKIE,
+  boardLayoutFromValue,
+} from "@/components/settings/board-layout-preference";
 
 /**
  * The first real view.
@@ -23,9 +27,9 @@ import {
 export default async function Home() {
   // Read here so the strip renders at its chosen size in the first byte. The
   // layout already reads a cookie, so this adds no dynamic render of its own.
-  const filmStripSize = filmStripSizeFromValue(
-    (await cookies()).get(FILM_STRIP_SIZE_COOKIE)?.value,
-  );
+  const jar = await cookies();
+  const filmStripSize = filmStripSizeFromValue(jar.get(FILM_STRIP_SIZE_COOKIE)?.value);
+  const boardLayout = boardLayoutFromValue(jar.get(BOARD_LAYOUT_COOKIE)?.value);
   return (
     // FULL WIDTH. The shell's <main> already pads the sides; a reel of video
     // cards wants every column the window can give it.
@@ -37,7 +41,7 @@ export default async function Home() {
         A fixture document, running on the nested-collections engine. Changes are
         undoable and are lost on reload.
       </p>
-      <Board initialFilmStripSize={filmStripSize} />
+      <Board initialFilmStripSize={filmStripSize} initialBoardLayout={boardLayout} />
     </div>
   );
 }

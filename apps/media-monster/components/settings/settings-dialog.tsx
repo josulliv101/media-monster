@@ -9,11 +9,33 @@ import {
   readFilmStripSize,
   subscribeFilmStripSize,
 } from "@/components/settings/film-strip-size-store";
+import {
+  commitBoardLayout,
+  readBoardLayout,
+  subscribeBoardLayout,
+} from "@/components/settings/board-layout-store";
+import type { BoardLayout } from "@/components/settings/board-layout-preference";
 import { cn } from "@/lib/utils";
 
-const SIZES: readonly { value: FilmStripSize; label: string; description: string }[] = [
+/** One setting's options: a value, what to call it, and what it does. */
+type Choice<T extends string> = Readonly<{ value: T; label: string; description: string }>;
+
+const SIZES: readonly Choice<FilmStripSize>[] = [
   { value: "default", label: "Default", description: "Tall frames." },
   { value: "compact", label: "Compact", description: "Short frames. More room for the board." },
+];
+
+const LAYOUTS: readonly Choice<BoardLayout>[] = [
+  {
+    value: "grid",
+    label: "Grid",
+    description: "Clips wrap onto as many rows as they need. Everything on screen at once.",
+  },
+  {
+    value: "row",
+    label: "Row",
+    description: "One row per collection, running off the right edge. Scroll it sideways, like the film strip.",
+  },
 ];
 
 /**
@@ -83,6 +105,7 @@ export function SettingsDialog({
 
 function SettingsPanel({ onDone }: Readonly<{ onDone: () => void }>) {
   const size = useSyncExternalStore(subscribeFilmStripSize, readFilmStripSize, readFilmStripSize);
+  const layout = useSyncExternalStore(subscribeBoardLayout, readBoardLayout, readBoardLayout);
 
   return (
     <div data-settings-panel className="p-5">
@@ -100,35 +123,77 @@ function SettingsPanel({ onDone }: Readonly<{ onDone: () => void }>) {
         </button>
       </header>
 
-      <fieldset>
-        <legend className="mb-2 text-sm font-medium text-zinc-300">Film strip size</legend>
-        <div className="grid gap-2">
-          {SIZES.map((option) => (
-            <label
-              key={option.value}
-              className={cn(
-                "flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors",
-                size === option.value
-                  ? "border-sky-500/60 bg-sky-500/10"
-                  : "border-zinc-800 hover:border-zinc-700",
-              )}
-            >
-              <input
-                type="radio"
-                name="film-strip-size"
-                value={option.value}
-                checked={size === option.value}
-                onChange={() => commitFilmStripSize(option.value)}
-                className="mt-0.5 accent-sky-500"
-              />
-              <span>
-                <span className="block text-sm text-zinc-100">{option.label}</span>
-                <span className="block text-xs text-zinc-500">{option.description}</span>
-              </span>
-            </label>
-          ))}
-        </div>
-      </fieldset>
+      <div className="grid gap-5">
+        <ChoiceGroup
+          legend="Board items"
+          name="board-layout"
+          options={LAYOUTS}
+          chosen={layout}
+          onChoose={commitBoardLayout}
+        />
+        <ChoiceGroup
+          legend="Film strip size"
+          name="film-strip-size"
+          options={SIZES}
+          chosen={size}
+          onChoose={commitFilmStripSize}
+        />
+      </div>
     </div>
+  );
+}
+
+/**
+ * One setting as a radio group, because two of them written out were the same
+ * twenty lines twice — and a third would have been a third copy.
+ *
+ * RADIOS, not a switch or a select: the options are named states the reader
+ * should be able to compare before picking, and each carries a line saying what
+ * it does. Generic in the value so a group cannot be handed options of one
+ * setting and the setter of another.
+ */
+function ChoiceGroup<T extends string>({
+  legend,
+  name,
+  options,
+  chosen,
+  onChoose,
+}: Readonly<{
+  legend: string;
+  name: string;
+  options: readonly Choice<T>[];
+  chosen: T;
+  onChoose: (value: T) => void;
+}>) {
+  return (
+    <fieldset>
+      <legend className="mb-2 text-sm font-medium text-zinc-300">{legend}</legend>
+      <div className="grid gap-2">
+        {options.map((option) => (
+          <label
+            key={option.value}
+            className={cn(
+              "flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 transition-colors",
+              chosen === option.value
+                ? "border-sky-500/60 bg-sky-500/10"
+                : "border-zinc-800 hover:border-zinc-700",
+            )}
+          >
+            <input
+              type="radio"
+              name={name}
+              value={option.value}
+              checked={chosen === option.value}
+              onChange={() => onChoose(option.value)}
+              className="mt-0.5 accent-sky-500"
+            />
+            <span>
+              <span className="block text-sm text-zinc-100">{option.label}</span>
+              <span className="block text-xs text-zinc-500">{option.description}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+    </fieldset>
   );
 }
