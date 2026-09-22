@@ -415,7 +415,19 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
     // TIGHTER PADDING ON A PHONE, and the saving compounds: collections nest,
     // so every level charges the cards inside it twice over — three deep at
     // 12px was 72px of a 375px screen before a card was drawn.
-    <section className="col-span-full rounded-xl border border-zinc-800 bg-zinc-950/60 p-2 md:p-3">
+    //
+    // INDENTED ON THE LEFT ONLY. A nested collection drops its right padding and
+    // right border, so it runs to its parent's content edge, and so does the one
+    // inside it: every row ends on one line whatever its depth, and the switches
+    // at the ends of the rows line up exactly. Each level used to step in 13px on
+    // the right as well, which staggered them. The depth still reads from the
+    // left, where the names step in. The row shown as the root keeps its box.
+    <section
+      className={cn(
+        "col-span-full border border-zinc-800 bg-zinc-950/60 p-2 md:p-3",
+        isRoot ? "rounded-xl" : "rounded-l-xl border-r-0 pr-0 md:pr-0",
+      )}
+    >
       {/* THE WHOLE BAR TOGGLES: name, duration and the space between them are
           one button. It bleeds 6px into the card's padding on three sides
           (block boxes, so the negative margins widen the bar rather than
