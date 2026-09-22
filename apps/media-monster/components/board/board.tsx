@@ -453,7 +453,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
                 <Film
                   data-collection-in-cut
                   aria-hidden="true"
-                  className="mr-1 size-3.5 shrink-0 text-zinc-300"
+                  className="mr-1 size-3.5 shrink-0 text-sky-400"
                 />
               ) : (
                 <Layers
@@ -462,7 +462,10 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
                   className="mr-1 size-3.5 shrink-0 text-zinc-300"
                 />
               )}
-              <span className="truncate">{data.name}</span>
+              {/* BLUE WHILE IT PLAYS: the name takes the film icon's colour, the
+                  same family as the switch's "on" track, so a row in the cut
+                  reads at a glance. A switched-off row keeps the ordinary ink. */}
+              <span className={cn("truncate", on ? "text-sky-400" : null)}>{data.name}</span>
               {/* AFTER THE NAME. Points right when closed and down when open;
                   brightens with the bar on hover and focus. */}
               <svg
