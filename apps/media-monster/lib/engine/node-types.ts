@@ -34,9 +34,22 @@ import {
  */
 export type ClipMedia = Readonly<{ kind: "video" | "image"; src: string }>;
 
-/** A piece of footage. `seconds` is what the fold rolls up. */
-export type Clip = Readonly<{ title: string; seconds: number; media: ClipMedia | null }>;
-export type ClipEdit = Readonly<{ title?: string; seconds?: number }>;
+/**
+ * A piece of footage. `seconds` is what the folds roll up.
+ *
+ * `active` says whether the clip is IN THE CUT: an active clip plays in the
+ * film strip, an inactive one stays on the board (an alternate take, a plate
+ * kept for later) and is left out of the strip and the reel's running time.
+ * Absent on the wire means active, so every document written before the flag
+ * existed reads as it did.
+ */
+export type Clip = Readonly<{
+  title: string;
+  seconds: number;
+  media: ClipMedia | null;
+  active: boolean;
+}>;
+export type ClipEdit = Readonly<{ title?: string; seconds?: number; active?: boolean }>;
 
 function parseMedia(raw: unknown): Result<ClipMedia | null, readonly Issue[]> {
   if (raw === undefined || raw === null) return { ok: true, value: null };
@@ -56,8 +69,11 @@ export const clip = defineNodeType<Clip, ClipEdit>()({
   // 2 ADDED `media`. Additive, so the migration is the identity — but bumped
   // all the same: an older build now SEALS a clip carrying media instead of
   // reading it, dropping the field and writing it back without it.
-  schemaVersion: 2,
-  migrations: { 2: (raw) => raw },
+  // 3 ADDED `active`, for the same reason and with the same identity
+  // migration: an older build would drop `active: false` and put the clip
+  // back in the strip.
+  schemaVersion: 3,
+  migrations: { 2: (raw) => raw, 3: (raw) => raw },
   parse(raw): Result<Clip, readonly Issue[]> {
     if (typeof raw !== "object" || raw === null) {
       return { ok: false, error: [{ path: "$", message: "not an object" }] };
@@ -82,15 +98,29 @@ export const clip = defineNodeType<Clip, ClipEdit>()({
     }
     const media = parseMedia((raw as { media?: unknown }).media);
     if (!media.ok) return media;
+    const active = (raw as { active?: unknown }).active;
+    if (active !== undefined && typeof active !== "boolean") {
+      return { ok: false, error: [{ path: "$.active", message: "active must be a boolean" }] };
+    }
     return {
       ok: true,
-      value: { title: title.trim(), seconds: seconds as number, media: media.value },
+      value: {
+        title: title.trim(),
+        seconds: seconds as number,
+        media: media.value,
+        active: active ?? true,
+      },
     };
   },
   serialize(data) {
-    return data.media === null
-      ? { title: data.title, seconds: data.seconds }
-      : { title: data.title, seconds: data.seconds, media: { ...data.media } };
+    // `active` is written only when false: absent already means active, and
+    // leaving it off keeps every clip in the cut exactly as it was written.
+    return {
+      title: data.title,
+      seconds: data.seconds,
+      ...(data.media === null ? {} : { media: { ...data.media } }),
+      ...(data.active ? {} : { active: false }),
+    };
   },
   applyEdit(data, edit) {
     return {
@@ -99,6 +129,7 @@ export const clip = defineNodeType<Clip, ClipEdit>()({
         title: edit.title ?? data.title,
         seconds: edit.seconds ?? data.seconds,
         media: data.media,
+        active: edit.active ?? data.active,
       },
     };
   },

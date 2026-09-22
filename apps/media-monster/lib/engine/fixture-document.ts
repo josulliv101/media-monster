@@ -237,7 +237,7 @@ function flatten(root: CollectionSeed): {
 
 const FLAT = flatten(TREE);
 
-const SCHEMA_VERSIONS = { clip: 2, collection: 1 };
+const SCHEMA_VERSIONS = { clip: 3, collection: 1 };
 
 const DOCUMENT = {
   formatVersion: 1 as const,
