@@ -114,6 +114,9 @@ const TAP_SLOP_PX = 4;
 /** Where the time chip sits relative to the top of the film's viewport — the
  *  reference's own offset, which the arrow and the line below it are set to. */
 const CHIP_TOP_PX = -3;
+/** How close to the window's edge the time chip may sit before it stops
+ *  following the playhead. */
+const CHIP_EDGE_INSET_PX = 4;
 
 /** `useSyncExternalStore` needs a subscribe; "am I on the client" never changes. */
 const subscribeToNothing = () => () => undefined;
@@ -567,7 +570,17 @@ export function FilmStrip({
       view.bottom > 0 &&
       view.top < window.innerHeight;
     chip.style.visibility = inView ? "visible" : "hidden";
-    chip.style.left = `${view.left + x}px`;
+    // IT OVERHANGS THE FILM, NOT THE SCREEN. Centred on the playhead, which at
+    // the head of the reel puts half of it past the film's left edge — that is
+    // the point, and it is why the chip is portalled out of the scroll box. The
+    // WINDOW is a harder boundary: past it the chip is cut in half, which on a
+    // phone is most of the time. Clamped, it slides along the edge instead.
+    const half = chip.offsetWidth / 2;
+    const left = Math.min(
+      Math.max(view.left + x - half, CHIP_EDGE_INSET_PX),
+      window.innerWidth - chip.offsetWidth - CHIP_EDGE_INSET_PX,
+    );
+    chip.style.left = `${left + half}px`;
     chip.style.top = `${view.top + CHIP_TOP_PX}px`;
   };
 

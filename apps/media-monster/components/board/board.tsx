@@ -310,7 +310,11 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   return (
     // `col-span-full`: a collection nested in another sits in its parent's grid
     // of clip cards, and takes a whole row rather than one card's column.
-    <section className="col-span-full rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
+    //
+    // TIGHTER PADDING ON A PHONE, and the saving compounds: collections nest,
+    // so every level charges the cards inside it twice over — three deep at
+    // 12px was 72px of a 375px screen before a card was drawn.
+    <section className="col-span-full rounded-xl border border-zinc-800 bg-zinc-950/60 p-2 md:p-3">
       {/* THE WHOLE BAR TOGGLES: name, duration and the space between them are
           one button. It bleeds 6px into the card's padding on three sides
           (block boxes, so the negative margins widen the bar rather than
@@ -376,7 +380,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
             ) : children.length === 0 ? (
               <p className="px-1 py-2 text-xs text-zinc-600">Empty.</p>
             ) : (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-3">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-2 md:gap-3">
                 {children.map((childId) => (
                   <NodeSlot key={childId} id={childId} />
                 ))}
@@ -506,7 +510,7 @@ export function Board({
           inside `main`'s padding) with no offsets to keep in step, and it
           settles into its own spot at the end of the board. The background is
           the page's, so cards scrolling under it do not show through. */}
-      <div className="sticky bottom-0 z-40 mt-6 bg-zinc-950 pt-3 pb-4">
+      <div className="sticky bottom-0 z-40 mt-6 bg-zinc-950 pt-3 pb-4 max-md:-mx-2">
         <BoardFilmStrip size={filmStripSize} />
       </div>
     </Provider>
