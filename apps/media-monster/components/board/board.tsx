@@ -274,8 +274,13 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   // OPEN OR CLOSED ON THE BOARD, and nothing more: a view preference held by
   // the card, not a document edit. The engine never hears about it, so it is
   // not undoable and does not touch the film strip, which is the whole reel
-  // whatever the board is showing. Starts open, and resets on reload.
-  const [collapsed, setCollapsed] = useState(false);
+  // whatever the board is showing. Resets on reload.
+  //
+  // STARTS CLOSED, so the board opens as an outline — every collection a bar
+  // you can open — rather than a wall of cards. The ROOT is the exception: it
+  // is the board itself, and closing it would leave one bar on an empty page.
+  const isRoot = graph.rootIds.includes(id);
+  const [collapsed, setCollapsed] = useState(!isRoot);
   const bodyId = useId();
 
   // AN UNREAD COLLECTION IS NOT AN EMPTY ONE, and this is the only place the app
