@@ -10,7 +10,7 @@ import {
   type NodeId,
 } from "@josulliv101/nested-collections";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ChevronRight, Focus, Redo2, Undo2 } from "lucide-react";
+import { ChevronRight, Film, Focus, Redo2, Undo2 } from "lucide-react";
 
 import {
   NodeSlot,
@@ -459,7 +459,19 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
               >
                 <path d="M2.5 1 L8.5 5 L2.5 9 Z" />
               </svg>
-              <span className={cn("truncate", on ? null : "text-zinc-500")}>{data.name}</span>
+              <span className="truncate">{data.name}</span>
+              {/* IN THE STRIP, AT A GLANCE: a film icon beside the name while
+                  this branch plays, gone when it does not. The name and the
+                  triangle are NOT dimmed — the row is still a row you can open
+                  and read; only whether it is in the cut changes. The switch
+                  carries the state for assistive tech, so this is decorative. */}
+              {on ? (
+                <Film
+                  data-collection-in-cut
+                  aria-hidden="true"
+                  className="size-3.5 shrink-0 text-zinc-300"
+                />
+              ) : null}
             </span>
             {total ? (
               <span className="shrink-0 text-base font-normal">
