@@ -107,7 +107,7 @@ export default async function RootLayout({
           <Rail initialRailExpanded={railExpanded} />
           {/* `pt-14` on a phone clears the fixed top bar the rail renders there;
               the gutters narrow with the screen. */}
-          <main className="min-w-0 flex-1 px-4 pt-14 md:px-8 md:pt-[13px]">
+          <main className="min-w-0 flex-1 px-2 pt-14 md:px-8 md:pt-[13px]">
             {children}
           </main>
         </div>

@@ -767,7 +767,7 @@ export const PLAYBAR_CSS = `.pb{
    restated because it keyed on \`.is-playing\` on the bar, an ancestor the
    chip no longer has. ─────────────────────────────────────────────────── */
 .pb .viewport{ -webkit-mask-image:none; mask-image:none; }
-.pb .ph-chip.ph-chip-floating{ position:fixed; z-index:55; visibility:hidden; }
+.pb .ph-chip.ph-chip-floating{ position:fixed; z-index:40; visibility:hidden; }
 .pb .ph-chip.ph-chip-floating.is-playing{
   box-shadow:0 2px 10px rgba(0,0,0,.55), 0 0 0 1px rgba(0,0,0,.25), 0 0 14px rgba(56, 189, 248,.45);
 }
