@@ -5,6 +5,7 @@ import { documentOrder, getNode, getParent, type NodeId } from "@josulliv101/nes
 import { FilmStrip, LOOKS, type FilmStripShot, type FilmStripSize } from "@storyboard/ui/film-strip";
 import { useGraph, useSelectionActions, useSelectionAnchor } from "@/lib/engine/bindings";
 import type { ClipMedia } from "@/lib/engine/node-types";
+import { switchedOffAt } from "@/lib/engine/branch-activity";
 import { imageUrl, videoFrameUrl } from "@/lib/media/cloudinary";
 
 /**
@@ -22,8 +23,8 @@ import { imageUrl, videoFrameUrl } from "@/lib/media/cloudinary";
  * media, or media Cloudinary cannot transform, falls back to one of the
  * reference design's gradients so the box is never blank.
  *
- * ONLY ACTIVE CLIPS. A clip flagged inactive on the board (an alternate take,
- * a plate kept for later) is left out, which is the whole point of the flag.
+ * ONLY WHAT IS IN THE CUT. A collection switched off on the board takes its
+ * whole branch out of the strip; a clip plays only when every row above it is on.
  *
  * AN UNREAD COLLECTION CONTRIBUTES NOTHING. Its clips are not in the graph, and
  * inventing a box for a stored summary would draw footage nobody has read. The
@@ -91,9 +92,9 @@ function shotsFromGraph(graph: ReturnType<typeof useGraph>, size: FilmStripSize)
   for (const id of documentOrder(graph)) {
     const node = getNode(graph, id);
     if (node === undefined || node.sealed || node.kind !== "clip") continue;
-    // INACTIVE CLIPS ARE NOT IN THE CUT. They stay on the board; the strip is
-    // what plays.
-    if (!node.data.active) continue;
+    // A SWITCHED-OFF BRANCH IS NOT IN THE CUT. Its clips stay on the board; the
+    // strip is what plays, and a clip plays only when every row above it is on.
+    if (switchedOffAt(graph, id) !== null) continue;
     // A clip directly under a root is not in a section; one inside a
     // collection is labelled with it on the ruler.
     const parentId = getParent(graph, id);

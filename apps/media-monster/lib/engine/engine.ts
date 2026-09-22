@@ -84,20 +84,24 @@ const secondsFold = foldMonoid<NodeTypes, CollectionSummary, number>({
 });
 
 /**
- * THE CUT'S RUNNING TIME: only clips flagged active, which is exactly what the
- * film strip plays. `seconds` stays the collection's CONTENT (everything on the
- * board, alternates included); this is the reel.
+ * THE CUT'S RUNNING TIME: only what the film strip plays. `seconds` stays the
+ * collection's CONTENT (everything on the board, switched off or not); this is
+ * the reel.
  *
- * An unread collection's stored summary does not say which of its clips are
- * active, so its placeholder is the whole summary. The fold reports that at
- * certainty "estimated" already, which is the honest reading: the running time
- * is not known until the collection is read.
+ * The switch is on the COLLECTIONS, and a fold is exactly the right shape for
+ * it: folds run bottom-up, so an inactive collection answers 0 for its whole
+ * subtree and every collection above it sums what is left. A clip deep under
+ * three rows is counted only when all three are on, with nobody walking up.
+ *
+ * AN INACTIVE BRANCH IS EXACT, even unread: whatever it holds, it contributes
+ * nothing, and that is known without reading it. An ACTIVE unread collection
+ * still answers with its stored summary at "estimated", as `seconds` does.
  */
-const activeSecondsFold = foldMonoid<NodeTypes, CollectionSummary, number>({
+const activeSecondsMonoid = foldMonoid<NodeTypes, CollectionSummary, number>({
   key: "activeSeconds",
   empty: 0,
   leaf(node) {
-    return node.kind === "clip" && node.data.active ? node.data.seconds : 0;
+    return node.kind === "clip" ? node.data.seconds : 0;
   },
   concat(a, b) {
     return a + b;
@@ -106,6 +110,23 @@ const activeSecondsFold = foldMonoid<NodeTypes, CollectionSummary, number>({
     return node.summary === null ? undefined : node.summary.seconds;
   },
 });
+
+const switchedOff = (node: Parameters<typeof activeSecondsMonoid.collection>[0]) =>
+  node.kind === "collection" && !node.data.active;
+
+const activeSecondsFold: typeof activeSecondsMonoid = {
+  ...activeSecondsMonoid,
+  collection(node, children) {
+    return switchedOff(node)
+      ? { value: 0, certainty: "exact" }
+      : activeSecondsMonoid.collection(node, children);
+  },
+  placeholder(node) {
+    return switchedOff(node)
+      ? { value: 0, certainty: "exact" }
+      : activeSecondsMonoid.placeholder(node);
+  },
+};
 
 export const engine = createEngine({
   types: nodeTypes,

@@ -462,3 +462,88 @@ export const CompactSizeShortensOnlyTheFrames: Story = {
     );
   },
 };
+
+/**
+ * A SELECTION FROM OUTSIDE MOVES THE PLAYHEAD, as a tap on the box would.
+ *
+ * A host that selects a clip (media-monster's "go to", a card on its board)
+ * used to move only the highlight: the strip centred the box and left the
+ * playhead where it was, so the two disagreed about which clip was current.
+ * Now an outside selection puts the playhead on the clip's first frame.
+ *
+ * A TAP MUST STILL WIN. The strip reports a tap through `onSelect`, the host
+ * echoes it back as `selectedId`, and that echo must not drag the playhead from
+ * where the tap landed to the clip's start. The last step checks exactly that.
+ */
+function OutsideSelectionHarness() {
+  const [selected, setSelected] = useState<string | null>(null);
+  return (
+    <div data-check-frame style={{ width: 1000 }}>
+      <button type="button" data-pick="s8" onClick={() => setSelected("s8")}>
+        s8
+      </button>
+      <button type="button" data-pick="s3" onClick={() => setSelected("s3")}>
+        s3
+      </button>
+      <FilmStrip
+        standalone={false}
+        shots={Array.from({ length: 12 }, (_, i) => plain(`s${i}`, 5))}
+        selectedId={selected}
+        onSelect={setSelected}
+      />
+    </div>
+  );
+}
+
+export const OutsideSelectionMovesThePlayhead: Story = {
+  render: () => <OutsideSelectionHarness />,
+  play: async ({ canvasElement }) => {
+    const viewport = canvasElement.querySelector<HTMLElement>("[data-seam-viewport]");
+    const slider = canvasElement.querySelector<HTMLElement>("[data-seam-track]");
+    if (viewport === null || slider === null) throw new Error("missing elements");
+    const now = () => Number(slider.getAttribute("aria-valuenow"));
+    const box = (id: string) => {
+      const found = Array.from(canvasElement.querySelectorAll<HTMLElement>(".shot")).find(
+        (candidate) => candidate.getAttribute("data-seam-segment") === id,
+      );
+      if (found === undefined) throw new Error(`no box ${id}`);
+      return found;
+    };
+    const offCentre = (id: string) => {
+      const b = box(id).getBoundingClientRect();
+      const v = viewport.getBoundingClientRect();
+      return Math.abs(b.x + b.width / 2 - (v.x + v.width / 2));
+    };
+    const pick = (id: string) =>
+      canvasElement.querySelector<HTMLButtonElement>(`[data-pick="${id}"]`)?.click();
+
+    await expect(now()).toBe(0);
+
+    // Outside selection: playhead to the clip's start, box to the centre.
+    pick("s8");
+    await waitFor(() => expect(now()).toBeCloseTo(40, 3));
+    await waitFor(() => expect(offCentre("s8")).toBeLessThanOrEqual(2), { timeout: 2000 });
+
+    pick("s3");
+    await waitFor(() => expect(now()).toBeCloseTo(15, 3));
+    await waitFor(() => expect(offCentre("s3")).toBeLessThanOrEqual(2), { timeout: 2000 });
+
+    // A tap three-fifths of the way into s4 lands THERE (about 23 s), and the
+    // host echoing the selection back does not pull it to s4's start (20 s).
+    const b = box("s4").getBoundingClientRect();
+    const at = {
+      clientX: b.x + b.width * 0.6,
+      clientY: b.y + b.height / 2,
+      bubbles: true,
+      isPrimary: true,
+      pointerId: 1,
+      button: 0,
+    };
+    box("s4").dispatchEvent(new PointerEvent("pointerdown", at));
+    box("s4").dispatchEvent(new PointerEvent("pointerup", at));
+    await waitFor(() => expect(now()).toBeGreaterThan(22));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(now()).toBeGreaterThan(22);
+    expect(now()).toBeLessThan(24);
+  },
+};
