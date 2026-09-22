@@ -235,13 +235,10 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
   const selection = useSelectionActions();
   const branch = use(BranchContext);
 
-  // DIMMED WHEN ITS BRANCH IS OFF, UNTIL YOU REACH FOR IT: hovering the card or
-  // focusing it lifts the dim, so a clip out of the cut still reads normally
-  // while you look at it. The switch is on the row above, not here.
-  const dimmed =
-    branch.offBy === null
-      ? null
-      : "opacity-35 grayscale group-hover/clip:opacity-100 group-hover/clip:grayscale-0 group-focus-within/clip:opacity-100 group-focus-within/clip:grayscale-0";
+  // NOT DIMMED WHEN ITS BRANCH IS OFF. The card is material you are keeping
+  // either way; the row above says whether it plays (its icon and switch), so
+  // the card draws the same in or out of the cut. `data-in-cut` still says
+  // which, for anything that needs to know.
 
   return (
     <div
@@ -261,15 +258,10 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
         onClick={() => selection.toggle(id)}
         className="flex w-full flex-col text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-500"
       >
-        <span className={cn("block transition-[opacity,filter] duration-150", dimmed)}>
+        <span className="block">
           <ClipPicture media={data.media} seconds={data.seconds} />
         </span>
-        <span
-          className={cn(
-            "flex items-baseline justify-between gap-3 px-3 py-2 transition-opacity duration-150",
-            dimmed,
-          )}
-        >
+        <span className="flex items-baseline justify-between gap-3 px-3 py-2">
           <span className="min-w-0 truncate text-sm">{data.title}</span>
           <span className="shrink-0 text-xs tabular-nums text-zinc-500">
             {formatSeconds(data.seconds)}
