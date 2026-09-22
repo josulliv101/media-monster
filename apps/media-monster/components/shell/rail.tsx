@@ -29,7 +29,10 @@ import {
   RailTooltipLabel,
 } from "@/components/shell/rail-tooltip-label";
 import { RailWordmark } from "@/components/shell/rail-wordmark";
-import { MediaMonsterMark } from "@/components/brand/media-monster-mark";
+import {
+  MediaMonsterMark,
+  MEDIA_MONSTER_ACCENT,
+} from "@/components/brand/media-monster-mark";
 import { SettingsDialog } from "@/components/settings/settings-dialog";
 import { cn } from "@/lib/utils";
 
@@ -410,9 +413,14 @@ export function Rail({
           aria-label="Media Monster home"
           className="flex items-center font-[family-name:var(--font-grandstander)] text-[17px] font-bold whitespace-nowrap text-white transition-colors hover:text-zinc-300"
         >
-          <span>media m</span>
-          <MediaMonsterMark scale={0.97} />
-          <span>nster</span>
+          {/* "media" in ink, "monster" in the accent, the same split the rail's
+              lockup makes: the creature is the "o" of the blue word. */}
+          <span>media&nbsp;</span>
+          <span className="flex items-center" style={{ color: MEDIA_MONSTER_ACCENT }}>
+            m
+            <MediaMonsterMark scale={0.97} />
+            nster
+          </span>
         </Link>
       </header>
 
