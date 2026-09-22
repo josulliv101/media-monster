@@ -10,7 +10,7 @@ import {
   type NodeId,
 } from "@josulliv101/nested-collections";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Archive, ChevronRight, Film, Focus, Redo2, Undo2 } from "lucide-react";
+import { ChevronRight, Film, Focus, Layers, Redo2, Undo2 } from "lucide-react";
 
 import {
   NodeSlot,
@@ -448,8 +448,10 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
           >
             <span className="flex min-w-0 items-center gap-1.5">
               {/* IN THE STRIP OR NOT, AT A GLANCE, and FIRST in the row: a film icon
-                  while this branch plays, an archive box when it does not — a row holding
-                  material rather than part of the cut. A little more room after
+                  while this branch plays, the collections icon when it does not — a row holding
+                  material rather than part of the cut. Layers, because it is
+                  the icon this project already means "collection" by: the film
+                  strip's section labels and the old app's collection cards. A little more room after
                   it (mr-1 on top of the gap) than between the name and the
                   triangle, so the icon reads as a marker rather than a letter. The name and
                   the triangle are NOT dimmed: the row is still a row you open
@@ -462,7 +464,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
                   className="mr-1 size-3.5 shrink-0 text-zinc-300"
                 />
               ) : (
-                <Archive
+                <Layers
                   data-collection-out-of-cut
                   aria-hidden="true"
                   className="mr-1 size-3.5 shrink-0 text-zinc-300"
