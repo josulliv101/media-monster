@@ -44,6 +44,7 @@ import {
 } from "@/components/settings/board-layout-store";
 import type { BoardLayout } from "@/components/settings/board-layout-preference";
 import { imageUrl, videoFrameUrl } from "@/lib/media/cloudinary";
+import { switchedOffAt } from "@/lib/engine/branch-activity";
 import type { ClipMedia, NodeTypes } from "@/lib/engine/node-types";
 import type { NodeViewProps } from "@josulliv101/nested-collections/react";
 import { cn } from "@/lib/utils";
@@ -212,6 +213,19 @@ function resolveFocus(graph: ReturnType<typeof useGraph>, raw: string | null): N
   return node !== undefined && !node.sealed && node.kind === "collection" ? parsed.value : null;
 }
 
+/**
+ * WHETHER THE BRANCH ABOVE IS IN THE CUT, handed down the tree.
+ *
+ * Each collection passes on whether it — and everything over it — is on, and
+ * if not, which row switched it off. Clip cards dim from it, and a child row
+ * disables its own switch from it, without anybody walking up the graph. The
+ * board seeds it for whatever it shows as the root, so a view "gone to" inside
+ * a switched-off branch starts off.
+ */
+type Branch = Readonly<{ offBy: NodeId | null; offByName: string | null }>;
+const ON: Branch = { offBy: null, offByName: null };
+const BranchContext = createContext<Branch>(ON);
+
 /** A clip card's width in a row, where the grid's `1fr` has no meaning: the
  *  cards run off the edge instead of sharing the width. */
 const ROW_CARD_WIDTH = "w-56";
@@ -219,29 +233,21 @@ const ROW_CARD_WIDTH = "w-56";
 function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
   const selected = useIsSelected(id);
   const selection = useSelectionActions();
-  const dispatch = useDispatch();
+  const branch = use(BranchContext);
 
-  // IN THE CUT OR NOT. A document edit, so it is undoable like any other and
-  // the strip follows it through the graph rather than through a side channel.
-  const toggleActive = () => {
-    dispatch({
-      type: "edit-nodes",
-      edits: [{ nodeId: id, kind: "clip", edit: { active: !data.active } }],
-    });
-  };
-
-  // DIMMED WHEN INACTIVE, UNTIL YOU REACH FOR IT: hovering the card or focusing
-  // anything in it lifts the dim, so an inactive clip reads normally while you
-  // look at it or flip it back on.
-  const dimmed = data.active
-    ? null
-    : "opacity-35 grayscale group-hover/clip:opacity-100 group-hover/clip:grayscale-0 group-focus-within/clip:opacity-100 group-focus-within/clip:grayscale-0";
+  // DIMMED WHEN ITS BRANCH IS OFF, UNTIL YOU REACH FOR IT: hovering the card or
+  // focusing it lifts the dim, so a clip out of the cut still reads normally
+  // while you look at it. The switch is on the row above, not here.
+  const dimmed =
+    branch.offBy === null
+      ? null
+      : "opacity-35 grayscale group-hover/clip:opacity-100 group-hover/clip:grayscale-0 group-focus-within/clip:opacity-100 group-focus-within/clip:grayscale-0";
 
   return (
-    // THE CARD IS A BOX HOLDING TWO CONTROLS, not one button: the picture and
-    // title select the clip, the switch below flags it. A button cannot hold a
-    // button, so the border and selected state live on this box instead.
     <div
+      data-clip-card
+      data-in-cut={branch.offBy === null}
+      title={branch.offByName === null ? undefined : `Not in the film strip: ${branch.offByName} is off`}
       className={cn(
         "group/clip flex flex-col overflow-hidden rounded-lg border transition-colors",
         selected
@@ -260,7 +266,7 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
         </span>
         <span
           className={cn(
-            "flex items-baseline justify-between gap-3 px-3 pt-2 transition-opacity duration-150",
+            "flex items-baseline justify-between gap-3 px-3 py-2 transition-opacity duration-150",
             dimmed,
           )}
         >
@@ -270,35 +276,30 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
           </span>
         </span>
       </button>
-      <div className="flex items-center px-3 pt-1.5 pb-2">
-        <button
-          type="button"
-          role="switch"
-          aria-checked={data.active}
-          title={data.active ? "In the film strip" : "Not in the film strip"}
-          data-clip-active-toggle
-          onClick={toggleActive}
-          className="flex items-center gap-2 rounded-md text-xs text-zinc-400 transition-colors hover:text-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
-        >
-          {/* The track and its knob; the knob slides right when active. */}
-          <span
-            aria-hidden="true"
-            className={cn(
-              "relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-150",
-              data.active ? "bg-sky-500" : "bg-zinc-700",
-            )}
-          >
-            <span
-              className={cn(
-                "absolute left-0.5 size-3 rounded-full bg-white shadow transition-transform duration-150 motion-reduce:transition-none",
-                data.active ? "translate-x-3" : "translate-x-0",
-              )}
-            />
-          </span>
-          Active
-        </button>
-      </div>
     </div>
+  );
+}
+
+/**
+ * The on/off switch a row wears: a track, and a knob that slides right when on.
+ * Drawn only; the button around it owns the semantics.
+ */
+function SwitchTrack({ on }: Readonly<{ on: boolean }>) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-150",
+        on ? "bg-sky-500" : "bg-zinc-700",
+      )}
+    >
+      <span
+        className={cn(
+          "absolute left-0.5 size-3 rounded-full bg-white shadow transition-transform duration-150 motion-reduce:transition-none",
+          on ? "translate-x-3" : "translate-x-0",
+        )}
+      />
+    </span>
   );
 }
 
@@ -324,6 +325,25 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   // "Root" means whatever the board is SHOWING as its root: after "go to", the
   // collection you went to opens, and everything inside it starts closed.
   const { shownRootId, focus } = use(BoardFocusContext);
+  const branch = use(BranchContext);
+
+  // IN THE CUT, per branch. `data.active` is this row's own setting; it counts
+  // only while everything above is on. A row under a switched-off parent shows
+  // OFF and cannot be flipped, but keeps its own setting for when the parent
+  // comes back on — the edit below never touches a child.
+  const parentOff = branch.offBy !== null;
+  const on = !parentOff && data.active;
+  const childBranch: Branch = parentOff
+    ? branch
+    : data.active
+      ? ON
+      : { offBy: id, offByName: data.name };
+  const toggleActive = () => {
+    dispatch({
+      type: "edit-nodes",
+      edits: [{ nodeId: id, kind: "collection", edit: { active: !data.active } }],
+    });
+  };
   const isRoot = id === (shownRootId ?? graph.rootIds[0]);
   const [collapsed, setCollapsed] = useState(!isRoot);
   const bodyId = useId();
@@ -378,7 +398,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
       type: "insert-nodes",
       toParentId: id,
       toIndex: children.length,
-      seeds: [{ kind: "clip", data: { title: "Untitled clip", seconds: 3, media: null, active: true } }],
+      seeds: [{ kind: "clip", data: { title: "Untitled clip", seconds: 3, media: null } }],
     });
     // EVERY FAILURE IS A TYPED RESULT, never a throw — so a refusal has to be
     // read to be noticed. Inserting into an unread collection is refused with
@@ -427,7 +447,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
               >
                 <path d="M2.5 1 L8.5 5 L2.5 9 Z" />
               </svg>
-              <span className="truncate">{data.name}</span>
+              <span className={cn("truncate", on ? null : "text-zinc-500")}>{data.name}</span>
             </span>
             {total ? (
               <span className="shrink-0 text-base font-normal">
@@ -436,6 +456,28 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
             ) : null}
           </button>
         </h3>
+        {/* IN THE CUT OR NOT, for this whole branch. Its own control beside
+            the bar, for the reason "go to" is: the bar means open or close.
+            Disabled, and shown off, while a row above is off. */}
+        <button
+          type="button"
+          role="switch"
+          aria-checked={on}
+          aria-label={`Active: ${data.name}`}
+          disabled={parentOff}
+          title={
+            parentOff
+              ? `Off because ${branch.offByName ?? "a collection above"} is off`
+              : on
+                ? `${data.name} is in the film strip. Switch off to take it out.`
+                : `${data.name} is out of the film strip. Switch on to put it back.`
+          }
+          data-collection-active
+          onClick={toggleActive}
+          className="flex shrink-0 items-center rounded-lg px-1.5 transition-colors hover:bg-zinc-800/60 focus-visible:outline-2 focus-visible:outline-sky-500 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+        >
+          <SwitchTrack on={on} />
+        </button>
         {/* GO TO: make this collection the top of the board. Its own button
             beside the duration rather than part of the bar, because the bar
             already means "open or close", and a click cannot mean both. Not on
@@ -458,6 +500,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
           render only while open, so a closed collection mounts none of its
           cards. */}
       <div id={bodyId} hidden={collapsed}>
+        <BranchContext value={childBranch}>
         {collapsed ? null : (
           <>
             {unread ? (
@@ -529,6 +572,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
             </div>
           </>
         )}
+        </BranchContext>
       </div>
     </section>
   );
@@ -663,6 +707,22 @@ function BoardBody({
   const selection = useSelectionActions();
   const focusedId = resolveFocus(graph, params.get("focus"));
   const shownRootId = focusedId ?? topId;
+  // The rows ABOVE what is shown are not on the page to pass their state down,
+  // so it is read from the graph here: gone to inside a switched-off branch,
+  // the view starts off.
+  const aboveId = getParent(graph, shownRootId);
+  const offAbove = aboveId === null ? null : switchedOffAt(graph, aboveId);
+  const offAboveNode = offAbove === null ? undefined : getNode(graph, offAbove);
+  const rootBranch: Branch =
+    offAbove === null
+      ? ON
+      : {
+          offBy: offAbove,
+          offByName:
+            offAboveNode !== undefined && !offAboveNode.sealed && offAboveNode.kind === "collection"
+              ? offAboveNode.data.name
+              : null,
+        };
   const focus = (id: NodeId | null) => {
     router.push(
       id === null || id === topId ? pathname : `${pathname}?focus=${encodeURIComponent(id)}`,
@@ -686,7 +746,9 @@ function BoardBody({
           {/* KEYED on the root it shows, so going somewhere is a fresh view:
               the new top opens and everything inside it starts closed, rather
               than inheriting whatever state that card had deeper in the tree. */}
-          <NodeSlot key={shownRootId} id={shownRootId} />
+          <BranchContext value={rootBranch}>
+            <NodeSlot key={shownRootId} id={shownRootId} />
+          </BranchContext>
         </BoardLayoutContext>
       </BoardFocusContext>
       {/* PINNED TO THE BOTTOM OF THE VIEWPORT. The strip is the reel's timeline,
@@ -705,10 +767,10 @@ function BoardBody({
 /**
  * The first clip under `rootId`, in document order, that the film strip shows.
  *
- * ACTIVE ONLY, because the strip leaves inactive clips out: selecting one would
- * highlight a card the strip has no box for, and the strip would not move. A
- * collection with nothing in the strip — all inactive, or not read yet — gives
- * `null`, and the strip stays where it is.
+ * IN THE CUT ONLY, because the strip leaves switched-off branches out: selecting
+ * a clip there would highlight a card the strip has no box for, and the strip
+ * would not move. A collection with nothing in the strip — switched off, or not
+ * read yet — gives `null`, and the strip stays where it is.
  */
 function firstClipInStrip(graph: ReturnType<typeof useGraph>, rootId: NodeId): NodeId | null {
   const inside = (id: NodeId): boolean => {
@@ -719,8 +781,8 @@ function firstClipInStrip(graph: ReturnType<typeof useGraph>, rootId: NodeId): N
   };
   for (const id of documentOrder(graph)) {
     const node = getNode(graph, id);
-    if (node === undefined || node.sealed || node.kind !== "clip" || !node.data.active) continue;
-    if (inside(id)) return id;
+    if (node === undefined || node.sealed || node.kind !== "clip") continue;
+    if (inside(id) && switchedOffAt(graph, id) === null) return id;
   }
   return null;
 }
