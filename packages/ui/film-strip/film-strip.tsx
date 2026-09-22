@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 import { TvMinimal } from "lucide-react";
 
@@ -105,6 +105,13 @@ const SKIM_GAP_PX = 10;
 const SKIM_EDGE_PX = 8;
 
 const TAP_SLOP_PX = 4;
+
+/** Where the time chip sits relative to the top of the film's viewport — the
+ *  reference's own offset, which the arrow and the line below it are set to. */
+const CHIP_TOP_PX = -3;
+
+/** `useSyncExternalStore` needs a subscribe; "am I on the client" never changes. */
+const subscribeToNothing = () => () => undefined;
 
 type Pan = {
   startX: number;
@@ -523,10 +530,44 @@ export function FilmStrip({
     )}px`;
   };
 
+  // THE TIME CHIP STAYS OVER THE PLAYHEAD, and may hang past any edge.
+  //
+  // It is portalled into the body and positioned FIXED (see the markup): the
+  // viewport clips, and the host's pinned strip sits below its rail. Centred on
+  // the playhead, never slid inward; hidden only while the playhead — or the
+  // strip itself — is out of view, so it never floats over something else.
+  // Written straight onto the node, like the skim card: it follows the clock
+  // and the scroll, and a re-render per scroll event to move one label is the
+  // cost this component avoids everywhere else.
+  const chipRef = useRef<HTMLDivElement | null>(null);
+  const placeChip = () => {
+    const chip = chipRef.current;
+    const viewport = viewportRef.current;
+    if (chip === null || viewport === null) return;
+    const view = viewport.getBoundingClientRect();
+    const x = timeRef.current * PXS - viewport.scrollLeft;
+    const inView =
+      x >= -0.5 &&
+      x <= viewport.clientWidth + 0.5 &&
+      view.bottom > 0 &&
+      view.top < window.innerHeight;
+    chip.style.visibility = inView ? "visible" : "hidden";
+    chip.style.left = `${view.left + x}px`;
+    chip.style.top = `${view.top + CHIP_TOP_PX}px`;
+  };
+
+  // Rendered on the client only — see the chip's markup.
+  const onClient = useSyncExternalStore(
+    subscribeToNothing,
+    () => true,
+    () => false,
+  );
+
   useEffect(() => {
     timeRef.current = time;
     placeSkim();
-  }, [time, placeSkim, skimPreview]);
+    placeChip();
+  }, [time, placeSkim, placeChip, skimPreview]);
 
   // `syncToScroll` LIVES INSIDE THE EFFECT. As a component-level function the
   // React Compiler left it uncached, so an effect keyed on it tore down and
@@ -535,6 +576,7 @@ export function FilmStrip({
   useEffect(() => {
     const syncToScroll = () => {
       placeSkim();
+      placeChip();
       const viewport = viewportRef.current;
       const content = contentRef.current;
       const lane = laneRef.current;
@@ -570,11 +612,23 @@ export function FilmStrip({
       frame = requestAnimationFrame(syncToScroll);
     };
     viewport.addEventListener("scroll", onScroll, { passive: true });
+    // A resize moves the visible edges without a scroll event: the time chip
+    // and the minimap window both have to follow it.
+    const resized = new ResizeObserver(onScroll);
+    resized.observe(viewport);
+    // The chip is FIXED, so the page scrolling or the window resizing moves the
+    // film under it without a scroll of the film itself. Capture, so a scroll
+    // of any ancestor — not only the document — is heard.
+    window.addEventListener("scroll", onScroll, { passive: true, capture: true });
+    window.addEventListener("resize", onScroll);
     return () => {
       cancelAnimationFrame(frame);
       viewport.removeEventListener("scroll", onScroll);
+      resized.disconnect();
+      window.removeEventListener("scroll", onScroll, { capture: true });
+      window.removeEventListener("resize", onScroll);
     };
-  }, [placeSkim, sections]);
+  }, [placeSkim, placeChip, sections]);
 
   /* ── inertia ────────────────────────────────────────────────────────── */
 
@@ -1344,22 +1398,50 @@ export function FilmStrip({
                   className="playhead"
                   style={{ transform: `translateX(${time * PXS}px)` }}
                 >
-                  <div className="ph-chip">
-                    {/* THE SAME MONITOR AS THE PREVIEW TOGGLE, deliberately the
-                        same glyph rather than a second one that means the same
-                        thing: the chip is the clock the pane is showing, so it
-                        wears the pane's own mark. Sized and coloured to the
-                        chip — it inherits `currentColor`, which is the chip's
-                        dark ink on its light ground, so it cannot drift from
-                        the text beside it. */}
-                    <TvMinimal className="ph-tv" aria-hidden="true" />
-                    {timecode(time)}
-                  </div>
                   <div className="ph-tri" />
                   <div className="ph-line" />
                 </div>
               </div>
             </div>
+
+            {/* THE TIME CHIP, PORTALLED OUT OF THE STRIP, like the skim card.
+                Inside the viewport it was clipped: at either end of the
+                sequence, or with the playhead scrolled to an edge, the half past
+                the edge was cut off. Moved into the bar it still went UNDER the
+                app's rail, because the host pins the strip in a stacking context
+                below it. In `document.body`, fixed over the playhead, it can
+                hang past any edge and nothing is drawn over it. `placeChip`
+                positions it on every tick, scroll and resize. It is still a
+                scrub handle, so it takes the strip's own pointer handlers — React
+                delivers a portal's events through the component tree as usual.
+
+                CLIENT ONLY: the server has no body to portal into, and rendering
+                it during hydration would not match the server's HTML. */}
+            {!onClient
+              ? null
+              : createPortal(
+                  <div className={PLAYBAR_SCOPE} style={{ display: "contents" }}>
+                    <div
+                      className={`ph-chip ph-chip-floating${playing ? " is-playing" : ""}`}
+                      ref={chipRef}
+                      data-seam-time-chip
+                      onPointerDown={onPointerDown}
+                      onPointerMove={onPointerMove}
+                      onPointerUp={onPointerUp}
+                      onPointerCancel={onPointerCancel}
+                    >
+                      {/* THE SAME MONITOR AS THE PREVIEW TOGGLE, deliberately
+                          the same glyph rather than a second one that means the
+                          same thing: the chip is the clock the pane is showing,
+                          so it wears the pane's own mark. It inherits
+                          `currentColor`, the chip's dark ink on its light
+                          ground, so it cannot drift from the text beside it. */}
+                      <TvMinimal className="ph-tv" aria-hidden="true" />
+                      {timecode(time)}
+                    </div>
+                  </div>,
+                  document.body,
+                )}
 
             <div className="minimap">
               <div

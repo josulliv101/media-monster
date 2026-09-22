@@ -36,5 +36,6 @@ export const {
   useNode,
   useSelectionActions,
   useSelectionAnchor,
+  useStore,
   defineNodeView,
 } = createReactBindings(engine);

@@ -42,8 +42,12 @@ type ClipSeed = Readonly<{ clip: string; seconds: number; media: Media }>;
 type CollectionSeed = Readonly<{
   collection: string;
   children?: readonly Seed[];
-  /** Present only on the one collection that has not been read. */
-  unreadSummarySeconds?: number;
+  /**
+   * Present only on a collection that has NOT BEEN READ. These are the children
+   * storage holds for it; the first document leaves them out, and they arrive
+   * through `readUnreadChildren` when the board opens the collection.
+   */
+  unread?: readonly Seed[];
 }>;
 type Seed = ClipSeed | CollectionSeed;
 
@@ -60,6 +64,11 @@ const still = (title: string, version: string, file: string): ClipSeed => ({
 const collection = (name: string, children: readonly Seed[]): CollectionSeed => ({
   collection: name,
   children,
+});
+/** A collection whose children stay in storage until it is opened. */
+const unreadCollection = (name: string, unread: readonly Seed[]): CollectionSeed => ({
+  collection: name,
+  unread,
 });
 
 const TREE: CollectionSeed = collection("Toon Town", [
@@ -96,13 +105,6 @@ const TREE: CollectionSeed = collection("Toon Town", [
         video("Van pan, seed 883", "v1786384167", "S02_h3_v8_seed883-1786384152917", 5.17),
       ]),
     ]),
-  ]),
-  collection("Locations", [
-    still("Street storefront row", "v1786244111", "loc_street_row-1786244087816"),
-    still("Armoured truck cab", "v1786244110", "loc_armoured_truck_cab-1786244082080"),
-    still("Van interior", "v1786244109", "loc_van_interior-1786244080409"),
-    still("Bank exterior", "v1786244112", "loc_bank_exterior-1786244089386"),
-    still("Bank lobby, high corner", "v1786244113", "loc_bank_lobby-1786244096076"),
   ]),
   collection("Characters", [
     collection("Pat", [
@@ -153,20 +155,45 @@ const TREE: CollectionSeed = collection("Toon Town", [
   ]),
   // NOT READ YET, and it says so. `children` is absent rather than empty, and
   // the stored `summary` is what the fold reports in its place — at certainty
-  // "estimated", never as a measurement.
-  { collection: "B-roll", unreadSummarySeconds: 42 },
+  // "estimated", never as a measurement. Opening it reads the real children
+  // (the project's location plates, empty sets with nobody in them, which is
+  // what B-roll is) and the estimate becomes an exact total.
+  unreadCollection("B-roll", [
+    collection("Locations", [
+      still("Street storefront row", "v1786244111", "loc_street_row-1786244087816"),
+      still("Armoured truck cab", "v1786244110", "loc_armoured_truck_cab-1786244082080"),
+      still("Van interior", "v1786244109", "loc_van_interior-1786244080409"),
+      still("Bank exterior", "v1786244112", "loc_bank_exterior-1786244089386"),
+      still("Bank lobby, high corner", "v1786244113", "loc_bank_lobby-1786244096076"),
+    ]),
+  ]),
 ]);
 
 type WireNode = Readonly<Record<string, unknown>>;
+
+/** Every clip's seconds under a seed — what a stored summary would record. */
+function secondsIn(seed: Seed): number {
+  if ("clip" in seed) return seed.seconds;
+  return [...(seed.children ?? []), ...(seed.unread ?? [])].reduce((sum, child) => sum + secondsIn(child), 0);
+}
 
 /**
  * The tree as the wire's flat node list, parents before children. Ids are
  * minted from the path of names, so they read like the board and stay stable
  * across edits to this file that do not rename anything.
+ *
+ * An unread collection's children go into a SEPARATE flat list, keyed by that
+ * collection's id: the page storage would hand back when it is opened. They
+ * share one id namespace with the main list, because once loaded they live in
+ * the same graph and the engine refuses a payload that reuses an id.
  */
-function flatten(root: CollectionSeed): { rootId: string; nodes: WireNode[] } {
-  const nodes: WireNode[] = [];
+function flatten(root: CollectionSeed): {
+  rootId: string;
+  nodes: WireNode[];
+  unread: Map<string, { rootIds: string[]; nodes: WireNode[] }>;
+} {
   const used = new Set<string>();
+  const unread = new Map<string, { rootIds: string[]; nodes: WireNode[] }>();
   const idFor = (path: readonly string[]): string => {
     const base = path
       .join("-")
@@ -178,10 +205,10 @@ function flatten(root: CollectionSeed): { rootId: string; nodes: WireNode[] } {
     used.add(id);
     return id;
   };
-  const visit = (seed: Seed, path: readonly string[]): string => {
+  const visit = (seed: Seed, path: readonly string[], into: WireNode[]): string => {
     if ("clip" in seed) {
       const id = idFor([...path, seed.clip]);
-      nodes.push({
+      into.push({
         id,
         kind: "clip",
         data: { title: seed.clip, seconds: seed.seconds, media: seed.media },
@@ -191,22 +218,30 @@ function flatten(root: CollectionSeed): { rootId: string; nodes: WireNode[] } {
     const here = [...path, seed.collection];
     const id = idFor(here);
     const node: Record<string, unknown> = { id, kind: "collection", data: { name: seed.collection } };
-    nodes.push(node);
-    if (seed.unreadSummarySeconds !== undefined) {
-      node.summary = { seconds: seed.unreadSummarySeconds };
+    into.push(node);
+    if (seed.unread !== undefined) {
+      // The summary is COMPUTED from what storage holds, so the estimate the
+      // board shows before opening is the total it shows after.
+      node.summary = { seconds: secondsIn(seed) };
+      const page: WireNode[] = [];
+      const rootIds = seed.unread.map((child) => visit(child, here, page));
+      unread.set(id, { rootIds, nodes: page });
     } else {
-      node.children = (seed.children ?? []).map((child) => visit(child, here));
+      node.children = (seed.children ?? []).map((child) => visit(child, here, into));
     }
     return id;
   };
-  return { rootId: visit(root, []), nodes };
+  const nodes: WireNode[] = [];
+  return { rootId: visit(root, [], nodes), nodes, unread };
 }
 
 const FLAT = flatten(TREE);
 
+const SCHEMA_VERSIONS = { clip: 2, collection: 1 };
+
 const DOCUMENT = {
   formatVersion: 1 as const,
-  schemaVersions: { clip: 2, collection: 1 },
+  schemaVersions: SCHEMA_VERSIONS,
   rootIds: [FLAT.rootId],
   nodes: FLAT.nodes,
 };
@@ -232,4 +267,28 @@ export function loadFixtureGraph() {
     throw new Error(`fixture failed to load: ${loaded.error.message}`);
   }
   return { graph: loaded.value.graph, report: loaded.value.report };
+}
+
+/** How long the pretend storage read takes — long enough to see the loading state. */
+const READ_DELAY_MS = 600;
+
+/**
+ * Read an unread collection's children from "storage": a FULL document whose
+ * roots become that collection's children, which is the shape `store.load`
+ * takes (a full document, so migrations run on lazy pages too).
+ *
+ * Async and delayed on purpose. Until documents come from a real backend this
+ * stands in for one, and a synchronous answer would hide the loading state the
+ * board has to handle. `null` means storage has nothing for that id.
+ */
+export async function readUnreadChildren(id: string): Promise<unknown> {
+  await new Promise((resolve) => setTimeout(resolve, READ_DELAY_MS));
+  const page = FLAT.unread.get(id);
+  if (page === undefined) return null;
+  return {
+    formatVersion: 1 as const,
+    schemaVersions: SCHEMA_VERSIONS,
+    rootIds: page.rootIds,
+    nodes: page.nodes,
+  };
 }

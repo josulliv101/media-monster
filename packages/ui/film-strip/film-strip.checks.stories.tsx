@@ -34,7 +34,7 @@ export const PlaybackAdvances: Story = {
     if (bar === null) throw new Error("the playbar did not render");
     // The readout is mm:ss:ff at 24 fps.
     const seconds = () => {
-      const [m = 0, s = 0, f = 0] = (bar.querySelector(".ph-chip")?.textContent ?? "")
+      const [m = 0, s = 0, f = 0] = (document.querySelector("[data-seam-time-chip]")?.textContent ?? "")
         .trim()
         .split(":")
         .map(Number);
@@ -69,8 +69,9 @@ const plain = (id: string, seconds: number, extra: Partial<FilmStripShot> = {}):
 });
 
 /** The playhead readout (mm:ss:ff at 24 fps) as seconds. */
-function readoutSeconds(root: HTMLElement): number {
-  const [m = 0, s = 0, f = 0] = (root.querySelector(".ph-chip")?.textContent ?? "")
+/** The chip is portalled into the body (see `placeChip`), so it is found there. */
+function readoutSeconds(): number {
+  const [m = 0, s = 0, f = 0] = (document.querySelector("[data-seam-time-chip]")?.textContent ?? "")
     .trim()
     .split(":")
     .map(Number);
@@ -128,7 +129,7 @@ export const PlaybackStopsAtAShortenedEnd: Story = {
     await wait(150);
     handles.setShots?.([plain("tiny", 0.25)]);
     await wait(900);
-    expect(readoutSeconds(bar)).toBeLessThanOrEqual(0.26);
+    expect(readoutSeconds()).toBeLessThanOrEqual(0.26);
     expect(bar.classList.contains("is-playing")).toBe(false);
   },
 };
@@ -144,7 +145,7 @@ export const PlaybackRunsIntoAnExtendedEnd: Story = {
     // Extended BEFORE the old end is reached: a stale loop still stops at 0.5.
     handles.setShots?.([plain("short", 0.5), plain("more", 5)]);
     await wait(1200);
-    expect(readoutSeconds(bar)).toBeGreaterThan(0.9);
+    expect(readoutSeconds()).toBeGreaterThan(0.9);
   },
 };
 
@@ -296,6 +297,84 @@ export const CancelledPanIsNotFlung: Story = {
     const afterCancel = viewport.scrollLeft;
     await wait(400);
     expect(viewport.scrollLeft).toBe(afterCancel);
+  },
+};
+
+/**
+ * THE PLAYHEAD'S TIME CHIP STAYS CENTRED ON THE PLAYHEAD AND OVERHANGS THE
+ * FILM'S EDGE, whole and on top — and the film does not fade at its edges.
+ *
+ * The chip lived inside the scrolling viewport, which clips: at either end of
+ * the sequence, or with the playhead scrolled to an edge, the half past the
+ * edge was cut off (and dimmed by the edge mask). Sliding it inward to fit was
+ * rejected — it must stay over the playhead and hang past the edge — so it is
+ * drawn above the viewport instead, and hidden only when the playhead itself is
+ * scrolled out of view.
+ */
+export const TimeChipOverhangsTheEdge: Story = {
+  render: () => (
+    // EMBEDDED, as media-monster uses it: the standalone page frame clips
+    // horizontally, which is the reference's own stage and not a host's.
+    <div style={{ width: 900, margin: "0 60px" }}>
+      <FilmStrip
+        standalone={false}
+        shots={Array.from({ length: 12 }, (_, i) => plain(`s${i}`, 5))}
+      />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const bar = playbar(canvasElement);
+    const viewport = canvasElement.querySelector<HTMLElement>("[data-seam-viewport]");
+    const chip = document.querySelector<HTMLElement>("[data-seam-time-chip]");
+    const playhead = canvasElement.querySelector<HTMLElement>("[data-seam-playhead]");
+    if (viewport === null || chip === null || playhead === null) {
+      throw new Error("missing elements");
+    }
+
+    const check = (label: string) => {
+      const c = chip.getBoundingClientRect();
+      const v = viewport.getBoundingClientRect();
+      const x = playhead.getBoundingClientRect().left;
+      // WHOLE AND ON TOP: both ends of the chip — including a part hanging past
+      // the film — are the topmost thing on screen.
+      const hit = (px: number) => {
+        const el = document.elementFromPoint(px, c.top + c.height / 2);
+        return el !== null && chip.contains(el);
+      };
+      return {
+        label,
+        visible: getComputedStyle(chip).visibility === "visible",
+        centred: Math.abs(c.left + c.width / 2 - x) <= 1,
+        whole: hit(c.left + 2) && hit(c.right - 2),
+        overhangs: c.left < v.left - 1 || c.right > v.right + 1,
+      };
+    };
+    const key = (k: string) =>
+      bar.dispatchEvent(new KeyboardEvent("keydown", { key: k, code: k, bubbles: true }));
+
+    await wait(400);
+    bar.focus();
+    const results = [check("start")];
+    // The end of the sequence, scrolled so the playhead sits on the right edge.
+    key("End");
+    await wait(200);
+    viewport.scrollLeft = 12 * 5 * 44 - viewport.clientWidth;
+    await wait(300);
+    results.push(check("end"));
+
+    expect(results).toEqual([
+      { label: "start", visible: true, centred: true, whole: true, overhangs: true },
+      { label: "end", visible: true, centred: true, whole: true, overhangs: true },
+    ]);
+
+    // Scrolled so the playhead is out of view: no chip floating over whatever
+    // sits beside the strip.
+    viewport.scrollLeft = 0;
+    await wait(300);
+    expect(getComputedStyle(chip).visibility).toBe("hidden");
+
+    // No edge fade: the film is shown at full strength right to the edge.
+    expect(getComputedStyle(viewport).maskImage).toBe("none");
   },
 };
 

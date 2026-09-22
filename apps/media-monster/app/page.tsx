@@ -18,7 +18,9 @@ export default function Home() {
   return (
     // FULL WIDTH. The shell's <main> already pads the sides; a reel of video
     // cards wants every column the window can give it.
-    <div className="py-10">
+    // No bottom padding: the film strip is pinned to the bottom of the
+    // viewport, and padding under it would make it rise when the page ends.
+    <div className="pt-10">
       <h1 className="mb-1 text-lg font-semibold text-zinc-100">Toon Town</h1>
       <p className="mb-6 text-sm text-zinc-500">
         A fixture document, running on the nested-collections engine. Changes are

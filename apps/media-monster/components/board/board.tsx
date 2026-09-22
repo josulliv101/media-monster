@@ -15,9 +15,14 @@ import {
   useIsSelected,
   useNode,
   useSelectionActions,
+  useStore,
 } from "@/lib/engine/bindings";
 import { engine } from "@/lib/engine/engine";
-import { FIXTURE_ROOT_ID, loadFixtureGraph } from "@/lib/engine/fixture-document";
+import {
+  FIXTURE_ROOT_ID,
+  loadFixtureGraph,
+  readUnreadChildren,
+} from "@/lib/engine/fixture-document";
 import { BoardFilmStrip } from "./board-film-strip";
 import { imageUrl, videoFrameUrl } from "@/lib/media/cloudinary";
 import type { ClipMedia, NodeTypes } from "@/lib/engine/node-types";
@@ -177,7 +182,9 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   const children = useChildren(id);
   const total = useFold("seconds", id);
   const dispatch = useDispatch();
+  const store = useStore();
   const [rejection, setRejection] = useState<string | null>(null);
+  const [reading, setReading] = useState(false);
 
   // AN UNREAD COLLECTION IS NOT AN EMPTY ONE, and this is the only place the app
   // can tell them apart. `useChildren` returns nothing for both — there are no
@@ -195,6 +202,25 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   const loadState = childrenState?.status ?? "loaded";
   const unread = loadState === "unloaded" || loadState === "reference";
   const summarized = total?.certainty === "estimated";
+
+  // OPENING READS IT. `store.load` is IO landing: no patch, no history entry,
+  // no change-feed event — loading is not an edit, so Undo does not un-read it.
+  // The fold re-renders on its own because the load bumps the subtree revision
+  // up the ancestor chain, which is how the estimate turns exact everywhere.
+  const open = async () => {
+    setReading(true);
+    setRejection(null);
+    const doc = await readUnreadChildren(id);
+    if (doc === null) {
+      // Storage has nothing for it. Recorded as missing rather than left unread,
+      // so the board stops offering to open something that cannot be read.
+      store.markMissing(id, "storage has no children for this collection");
+    } else {
+      const loaded = store.load(id, doc);
+      if (!loaded.ok) setRejection(`${loaded.error.code}: ${loaded.error.message}`);
+    }
+    setReading(false);
+  };
 
   const addClip = () => {
     const result = dispatch({
@@ -228,7 +254,15 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
         <p className="rounded-lg border border-dashed border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-300/80">
           {summarized
             ? "Not read yet. Its stored summary is answering for it."
-            : "Not read yet, and nothing is stored about what it holds."}
+            : "Not read yet, and nothing is stored about what it holds."}{" "}
+          <button
+            type="button"
+            onClick={() => void open()}
+            disabled={reading}
+            className="ml-1 rounded-md border border-amber-400/40 px-2 py-0.5 text-amber-200 transition-colors hover:border-amber-300 hover:text-amber-100 disabled:cursor-wait disabled:opacity-60"
+          >
+            {reading ? "Reading…" : "Open"}
+          </button>
         </p>
       ) : loadState === "missing" ? (
         <p className="px-1 py-2 text-xs text-zinc-500">Gone from storage.</p>
@@ -309,7 +343,13 @@ export function Board() {
       ) : null}
       <Toolbar rootId={rootId} />
       <NodeSlot id={rootId} />
-      <div className="mt-6">
+      {/* PINNED TO THE BOTTOM OF THE VIEWPORT. The strip is the reel's timeline,
+          so it stays in reach while the board scrolls above it. `sticky` rather
+          than `fixed`: it keeps its place in the page's width (beside the rail,
+          inside `main`'s padding) with no offsets to keep in step, and it
+          settles into its own spot at the end of the board. The background is
+          the page's, so cards scrolling under it do not show through. */}
+      <div className="sticky bottom-0 z-40 mt-6 bg-zinc-950 pt-3 pb-4">
         <BoardFilmStrip />
       </div>
     </Provider>
