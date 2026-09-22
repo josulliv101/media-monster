@@ -105,7 +105,11 @@ export default async function RootLayout({
               paint is already the right width and hydration has nothing to
               correct. */}
           <Rail initialRailExpanded={railExpanded} />
-          <main className="min-w-0 flex-1 px-8 pt-[13px]">{children}</main>
+          {/* `pt-14` on a phone clears the fixed top bar the rail renders there;
+              the gutters narrow with the screen. */}
+          <main className="min-w-0 flex-1 px-4 pt-14 md:px-8 md:pt-[13px]">
+            {children}
+          </main>
         </div>
       </body>
     </html>
