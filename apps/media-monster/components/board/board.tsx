@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useSyncExternalStore } from "react";
+import { useId, useState, useSyncExternalStore } from "react";
 import { parseNodeId } from "@josulliv101/nested-collections";
 import { Redo2, Undo2 } from "lucide-react";
 
@@ -180,7 +180,6 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
   );
 }
 
-defineNodeView("clip", ClipCard);
 
 function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   const node = useNode(id);
@@ -190,6 +189,12 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   const store = useStore();
   const [rejection, setRejection] = useState<string | null>(null);
   const [reading, setReading] = useState(false);
+  // OPEN OR CLOSED ON THE BOARD, and nothing more: a view preference held by
+  // the card, not a document edit. The engine never hears about it, so it is
+  // not undoable and does not touch the film strip, which is the whole reel
+  // whatever the board is showing. Starts open, and resets on reload.
+  const [collapsed, setCollapsed] = useState(false);
+  const bodyId = useId();
 
   // AN UNREAD COLLECTION IS NOT AN EMPTY ONE, and this is the only place the app
   // can tell them apart. `useChildren` returns nothing for both — there are no
@@ -246,60 +251,119 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
     // `col-span-full`: a collection nested in another sits in its parent's grid
     // of clip cards, and takes a whole row rather than one card's column.
     <section className="col-span-full rounded-xl border border-zinc-800 bg-zinc-950/60 p-3">
-      <header className="mb-2 flex items-baseline justify-between gap-3">
-        <h3 className="truncate text-sm font-semibold text-zinc-100">
-          {data.name}
-        </h3>
-        {total ? (
-          <Duration value={total.value} certainty={total.certainty} />
-        ) : null}
-      </header>
-
-      {unread ? (
-        <p className="rounded-lg border border-dashed border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-300/80">
-          {summarized
-            ? "Not read yet. Its stored summary is answering for it."
-            : "Not read yet, and nothing is stored about what it holds."}{" "}
+      {/* THE WHOLE BAR TOGGLES: name, duration and the space between them are
+          one button. It bleeds 6px into the card's padding on three sides
+          (block boxes, so the negative margins widen the bar rather than
+          shrinking anything's natural width) and pads back by the same 6px,
+          so the text sits exactly where the padding put it. The hover tint and
+          focus ring then read as the bar, not as a tight box round the name. */}
+      <header className={cn("-mx-1.5 -mt-1.5", collapsed ? "-mb-1.5" : "mb-0.5")}>
+        <h3 className="text-sm font-semibold text-zinc-100">
           <button
             type="button"
-            onClick={() => void open()}
-            disabled={reading}
-            className="ml-1 rounded-md border border-amber-400/40 px-2 py-0.5 text-amber-200 transition-colors hover:border-amber-300 hover:text-amber-100 disabled:cursor-wait disabled:opacity-60"
+            aria-expanded={!collapsed}
+            aria-controls={bodyId}
+            data-collection-toggle
+            onClick={() => setCollapsed((was) => !was)}
+            className="group flex w-full items-baseline justify-between gap-3 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-zinc-800/60 focus-visible:bg-zinc-800/60 focus-visible:outline-2 focus-visible:outline-sky-500"
           >
-            {reading ? "Reading…" : "Open"}
+            <span className="flex min-w-0 items-center gap-1.5">
+              {/* Points right when closed and down when open; brightens with
+                  the bar on hover and focus. */}
+              <svg
+                viewBox="0 0 10 10"
+                aria-hidden="true"
+                className={cn(
+                  "size-2.5 shrink-0 fill-zinc-500 transition-[rotate,fill] duration-150 group-hover:fill-zinc-100 group-focus-visible:fill-zinc-100 motion-reduce:transition-none",
+                  collapsed ? null : "rotate-90",
+                )}
+              >
+                <path d="M2.5 1 L8.5 5 L2.5 9 Z" />
+              </svg>
+              <span className="truncate">{data.name}</span>
+            </span>
+            {total ? (
+              <span className="shrink-0 text-base font-normal">
+                <Duration value={total.value} certainty={total.certainty} />
+              </span>
+            ) : null}
           </button>
-        </p>
-      ) : loadState === "missing" ? (
-        <p className="px-1 py-2 text-xs text-zinc-500">Gone from storage.</p>
-      ) : children.length === 0 ? (
-        <p className="px-1 py-2 text-xs text-zinc-600">Empty.</p>
-      ) : (
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-3">
-          {children.map((childId) => (
-            <NodeSlot key={childId} id={childId} />
-          ))}
-        </div>
-      )}
+        </h3>
+      </header>
 
-      <div className="mt-2 flex items-center gap-3">
-        <button
-          type="button"
-          onClick={addClip}
-          className="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:text-zinc-100"
-        >
-          Add clip
-        </button>
-        {rejection ? (
-          <span role="status" className="truncate text-xs text-red-400">
-            {rejection}
-          </span>
-        ) : null}
+      {/* Always in the DOM so `aria-controls` names something; its contents
+          render only while open, so a closed collection mounts none of its
+          cards. */}
+      <div id={bodyId} hidden={collapsed}>
+        {collapsed ? null : (
+          <>
+            {unread ? (
+              <p className="rounded-lg border border-dashed border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-300/80">
+                {summarized
+                  ? "Not read yet. Its stored summary is answering for it."
+                  : "Not read yet, and nothing is stored about what it holds."}{" "}
+                <button
+                  type="button"
+                  onClick={() => void open()}
+                  disabled={reading}
+                  className="ml-1 rounded-md border border-amber-400/40 px-2 py-0.5 text-amber-200 transition-colors hover:border-amber-300 hover:text-amber-100 disabled:cursor-wait disabled:opacity-60"
+                >
+                  {reading ? "Reading…" : "Open"}
+                </button>
+              </p>
+            ) : loadState === "missing" ? (
+              <p className="px-1 py-2 text-xs text-zinc-500">Gone from storage.</p>
+            ) : children.length === 0 ? (
+              <p className="px-1 py-2 text-xs text-zinc-600">Empty.</p>
+            ) : (
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-3">
+                {children.map((childId) => (
+                  <NodeSlot key={childId} id={childId} />
+                ))}
+              </div>
+            )}
+
+            <div className="mt-2 flex items-center gap-3">
+              <button
+                type="button"
+                onClick={addClip}
+                className="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:text-zinc-100"
+              >
+                Add clip
+              </button>
+              {rejection ? (
+                <span role="status" className="truncate text-xs text-red-400">
+                  {rejection}
+                </span>
+              ) : null}
+            </div>
+          </>
+        )}
       </div>
     </section>
   );
 }
 
-defineNodeView("collection", CollectionCard);
+/**
+ * THE BOARD'S VIEWS, REGISTERED ONCE PER PAGE LOAD.
+ *
+ * Hot reload re-runs this module but not `bindings.ts`, whose registry already
+ * holds the views from the first run, so registering unconditionally reported
+ * "a view for kind ... is already registered" on every edit to this file. A
+ * flag on `globalThis` survives the re-run and a full reload clears it.
+ *
+ * An edit still shows up without a reload: Fast Refresh swaps a component's
+ * implementation by its identity in the refresh runtime, not through whatever
+ * reference the registry kept, so the first-run `ClipCard` renders the edited
+ * code. Measured by editing the collection card's text with the page open.
+ */
+const VIEWS_REGISTERED = Symbol.for("media-monster:board-views-registered");
+const registry = globalThis as { [VIEWS_REGISTERED]?: true };
+if (registry[VIEWS_REGISTERED] === undefined) {
+  registry[VIEWS_REGISTERED] = true;
+  defineNodeView("clip", ClipCard);
+  defineNodeView("collection", CollectionCard);
+}
 
 function Toolbar({ rootId }: Readonly<{ rootId: ReturnType<typeof parseNodeId> }>) {
   const { canUndo, canRedo, undo, redo } = useHistory();
