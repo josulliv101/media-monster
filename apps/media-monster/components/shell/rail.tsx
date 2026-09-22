@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useEffect, useRef, useSyncExternalStore } from "react";
-import { PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import React, { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { PanelLeftClose, PanelLeftOpen, Settings } from "lucide-react";
 import { flushSync } from "react-dom";
 
 import { runRailJump } from "@/components/shell/rail-jump";
@@ -28,6 +28,7 @@ import {
   RailTooltipLabel,
 } from "@/components/shell/rail-tooltip-label";
 import { RailWordmark } from "@/components/shell/rail-wordmark";
+import { SettingsDialog } from "@/components/settings/settings-dialog";
 import { cn } from "@/lib/utils";
 
 /**
@@ -39,8 +40,8 @@ import { cn } from "@/lib/utils";
  * four call sites, all in the bottom third of that file, and none of them is
  * reachable from what is here.
  *
- * SO THIS IS THE RAIL MINUS ITS DESTINATIONS. It has one tile — its own width
- * toggle — and that is not a stub. The rail's job in the source is to answer
+ * SO THIS IS THE RAIL MINUS ITS DESTINATIONS. It has two tiles — settings and
+ * its own width toggle — and that is not a stub. The rail's job in the source is to answer
  * "where am I", and this app has nowhere to be yet; inventing tiles that lead to
  * nothing would be worse than a rail that honestly has one control. The layout
  * switch, the collection shortcuts, the trash and the account tile each arrive
@@ -106,6 +107,13 @@ export function Rail({
   initialRailExpanded?: boolean;
 }> = {}) {
   const railRef = useRef<HTMLElement>(null);
+  const settingsRef = useRef<HTMLDialogElement>(null);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+
+  const openSettings = () => {
+    setSettingsOpen(true);
+    settingsRef.current?.showModal();
+  };
 
   // Read through an EXTERNAL STORE rather than an effect. The naive shape — a
   // `useState(false)` corrected by a mount effect — is a synchronous setState
@@ -232,7 +240,7 @@ export function Rail({
       >
         <RailWordmark expanded={railExpanded} />
 
-        {/* THE RAIL'S OWN WIDTH CONTROL, and for now the only tile.
+        {/* THE RAIL'S OWN WIDTH CONTROL, beneath settings.
 
             Pinned to the floor by `mt-auto`, which is where the source app puts
             it: it is the one control about the RAIL rather than about the work,
@@ -247,6 +255,26 @@ export function Rail({
             preference you can already see in the rail's width. The glyph
             flipping direction is the state readout. */}
         <div className="relative mt-auto flex w-full flex-col items-stretch gap-0">
+          {/* SETTINGS, above the width toggle: both are about the app rather
+              than the work, so they share the floor group. Idle treatment, as
+              the toggle wears — opening a dialog is not a mode. */}
+          <button
+            type="button"
+            aria-haspopup="dialog"
+            aria-expanded={settingsOpen}
+            aria-label="Settings"
+            aria-describedby="rail-tooltip-settings"
+            data-rail-settings
+            onClick={openSettings}
+            className={cn(RAIL_TILE_BASE, RAIL_TILE_IDLE)}
+          >
+            <Settings className={RAIL_GLYPH} />
+            <RailTooltipLabel
+              id="rail-tooltip-settings"
+              label="Settings"
+              description="Film strip size and other preferences"
+            />
+          </button>
           <button
             type="button"
             aria-expanded={railExpanded}
@@ -269,6 +297,14 @@ export function Rail({
           </button>
         </div>
       </aside>
+      {/* Outside the aside: the rail is sticky and z-50, and a modal opened
+          with showModal() is in the top layer anyway, but keeping it out of
+          the rail's subtree keeps the rail's click handling off it. */}
+      <SettingsDialog
+        dialogRef={settingsRef}
+        open={settingsOpen}
+        onClose={() => setSettingsOpen(false)}
+      />
     </RailLabelsInlineContext.Provider>
   );
 }

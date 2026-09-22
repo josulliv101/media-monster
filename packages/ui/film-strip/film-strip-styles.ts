@@ -30,6 +30,9 @@ export const PLAYBAR_SCOPE = "pb";
  *  that a component embedded in the app must not bring with it. */
 export const PLAYBAR_PAGE_CLASS = "pb-page";
 
+/** Added for `size="compact"`: shorter frames. */
+export const PLAYBAR_COMPACT_CLASS = "pb-compact";
+
 export const PLAYBAR_CSS = `.pb{
   --ink:        #08090d;   /* stage background            */
   --panel-hi:   #14181f;   /* bar surface, top            */
@@ -768,4 +771,11 @@ export const PLAYBAR_CSS = `.pb{
 .pb .ph-chip.ph-chip-floating.is-playing{
   box-shadow:0 2px 10px rgba(0,0,0,.55), 0 0 0 1px rgba(0,0,0,.25), 0 0 14px rgba(56, 189, 248,.45);
 }
+
+/* COMPACT SIZE. Only the frames shrink: the lane, ruler, playhead and minimap
+   keep their geometry, so the chip, the trim handles and every
+   pointer interaction land in the same places at either size. The frame label
+   still fits at 64px (it sits 8px from the top and is ~20px tall). */
+.pb.pb-compact .playbar{ padding:10px 0 6px; }
+.pb.pb-compact .strip{ height:64px; }
 `;

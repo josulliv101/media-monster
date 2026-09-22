@@ -409,3 +409,56 @@ export const ResizeKeepsTheSelectionCentred: Story = {
     expect(offCentre()).toBeLessThanOrEqual(2);
   },
 };
+
+/**
+ * COMPACT SIZE: shorter frames, and nothing else moves — the minimap included. The lane,
+ * ruler and playhead keep their geometry, so the time chip sits where it does
+ * at the default size and a click on the ruler still lands the playhead.
+ */
+export const CompactSizeShortensOnlyTheFrames: Story = {
+  render: () => (
+    <div style={{ width: 900, margin: "0 60px", display: "grid", gap: 24 }}>
+      <div data-size-probe="default">
+        <FilmStrip standalone={false} shots={Array.from({ length: 6 }, (_, i) => plain(`d${i}`, 5))} />
+      </div>
+      <div data-size-probe="compact">
+        <FilmStrip
+          standalone={false}
+          size="compact"
+          shots={Array.from({ length: 6 }, (_, i) => plain(`c${i}`, 5))}
+        />
+      </div>
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const part = (size: string, selector: string) => {
+      const el = canvasElement.querySelector<HTMLElement>(`[data-size-probe="${size}"] ${selector}`);
+      if (el === null) throw new Error(`missing ${selector} in ${size}`);
+      return el;
+    };
+    const height = (size: string, selector: string) =>
+      Math.round(part(size, selector).getBoundingClientRect().height);
+
+    await expect(part("compact", "[data-seam-size]").dataset.seamSize).toBe("compact");
+    await expect(height("default", ".strip")).toBe(150);
+    await expect(height("compact", ".strip")).toBe(64);
+    await expect(getComputedStyle(part("default", ".minimap")).display).not.toBe("none");
+    await expect(getComputedStyle(part("compact", ".minimap")).display).not.toBe("none");
+    await expect(height("compact", ".minimap")).toBe(height("default", ".minimap"));
+    // Unchanged geometry above the frames.
+    await expect(height("compact", ".ruler")).toBe(height("default", ".ruler"));
+    await expect(height("compact", ".lane")).toBe(height("default", ".lane"));
+
+    // The ruler still scrubs: a click 5 seconds in lands the playhead there.
+    const ruler = part("compact", ".ruler");
+    const box = ruler.getBoundingClientRect();
+    const slider = part("compact", "[data-seam-track]");
+    const x = box.left + 5 * 44 - part("compact", "[data-seam-viewport]").scrollLeft;
+    const at = { clientX: x, clientY: box.top + box.height / 2, bubbles: true, isPrimary: true, pointerId: 1, button: 0 };
+    ruler.dispatchEvent(new PointerEvent("pointerdown", at));
+    ruler.dispatchEvent(new PointerEvent("pointerup", at));
+    await waitFor(() =>
+      expect(Math.abs(Number(slider.getAttribute("aria-valuenow")) - 5)).toBeLessThan(0.25),
+    );
+  },
+};

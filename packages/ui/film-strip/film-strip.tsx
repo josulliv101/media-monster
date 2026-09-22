@@ -20,7 +20,12 @@ import {
   willFling,
 } from "./film-strip-motion";
 import { PlaybarFrame } from "./film-strip-frame";
-import { PLAYBAR_CSS, PLAYBAR_PAGE_CLASS, PLAYBAR_SCOPE } from "./film-strip-styles";
+import {
+  PLAYBAR_COMPACT_CLASS,
+  PLAYBAR_CSS,
+  PLAYBAR_PAGE_CLASS,
+  PLAYBAR_SCOPE,
+} from "./film-strip-styles";
 
 /** Read at the moment of the move rather than at mount, because the setting can
  *  change under a long-lived view and a cached answer would outlive it. */
@@ -193,8 +198,17 @@ export type FilmStripProps = Readonly<{
    * repainted them would be claiming a page it does not own.
    */
   standalone?: boolean;
+  /**
+   * How much room the strip takes. `"compact"` shortens the frames, for a host that pins the strip under content and wants that
+   * content to keep most of the screen. Everything else (the ruler, the
+   * playhead, the time chip, the minimap) keeps its geometry, so every interaction behaves
+   * the same at either size.
+   */
+  size?: FilmStripSize;
   className?: string;
 }>;
+
+export type FilmStripSize = "default" | "compact";
 
 /** Seconds of scale kept built beyond each edge of the viewport, so a scroll
  *  has somewhere to go before the next measurement lands. */
@@ -216,6 +230,7 @@ export function FilmStrip({
   onTogglePlay,
   onSelect,
   standalone = true,
+  size = "default",
   className,
 }: FilmStripProps) {
   const shots = placeShots(shotsProp ?? REFERENCE_SHOTS);
@@ -1198,7 +1213,13 @@ export function FilmStrip({
 
   return (
     <div
-      className={[PLAYBAR_SCOPE, standalone ? PLAYBAR_PAGE_CLASS : "", className ?? ""]
+      data-seam-size={size}
+      className={[
+        PLAYBAR_SCOPE,
+        standalone ? PLAYBAR_PAGE_CLASS : "",
+        size === "compact" ? PLAYBAR_COMPACT_CLASS : "",
+        className ?? "",
+      ]
         .join(" ")
         .trim()}
     >

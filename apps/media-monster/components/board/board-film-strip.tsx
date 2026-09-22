@@ -2,7 +2,7 @@
 
 import { documentOrder, getNode, getParent, type NodeId } from "@josulliv101/nested-collections";
 
-import { FilmStrip, LOOKS, type FilmStripShot } from "@storyboard/ui/film-strip";
+import { FilmStrip, LOOKS, type FilmStripShot, type FilmStripSize } from "@storyboard/ui/film-strip";
 import { useGraph, useSelectionActions, useSelectionAnchor } from "@/lib/engine/bindings";
 import type { ClipMedia } from "@/lib/engine/node-types";
 import { imageUrl, videoFrameUrl } from "@/lib/media/cloudinary";
@@ -17,7 +17,7 @@ import { imageUrl, videoFrameUrl } from "@/lib/media/cloudinary";
  * either surface is picked on both.
  *
  * REAL FRAMES. A video clip is sampled across its length with Cloudinary frame
- * grabs, one frame per ~200px of box so a long shot reads as a run of footage
+ * grabs, one frame per ~200px of box (~114px when compact) so a long shot reads as a run of footage
  * and a short one as its middle. An image clip is its still. A clip with no
  * media, or media Cloudinary cannot transform, falls back to one of the
  * reference design's gradients so the box is never blank.
@@ -30,17 +30,24 @@ import { imageUrl, videoFrameUrl } from "@/lib/media/cloudinary";
 /** The strip's own scale (`@storyboard/ui/film-strip`): 44px a second, 150px tall. */
 const PX_PER_SECOND = 44;
 const FRAME = { width: 320, height: 180 } as const;
-const FRAME_SPAN_PX = 200;
+/** Box width each sampled frame covers, per strip size. The compact strip's
+ *  frames are 64px tall rather than 150, so a 16:9 grab is ~114px wide there;
+ *  sampling at the default's 200px would crop every frame to its middle. */
+const FRAME_SPAN_PX: Readonly<Record<FilmStripSize, number>> = { default: 200, compact: 114 };
 
 const cover = (url: string) => `url("${url}") center / cover no-repeat, #0b0d12`;
 
-function framesFor(media: ClipMedia | null, seconds: number): readonly string[] | null {
+function framesFor(
+  media: ClipMedia | null,
+  seconds: number,
+  spanPx: number,
+): readonly string[] | null {
   if (media === null) return null;
   if (media.kind === "image") {
     const still = imageUrl(media.src, FRAME);
     return still === null ? null : [cover(still)];
   }
-  const count = Math.max(1, Math.round((seconds * PX_PER_SECOND) / FRAME_SPAN_PX));
+  const count = Math.max(1, Math.round((seconds * PX_PER_SECOND) / spanPx));
   const frames: string[] = [];
   for (let i = 0; i < count; i += 1) {
     const url = videoFrameUrl(media.src, ((i + 0.5) / count) * seconds, FRAME);
@@ -75,7 +82,7 @@ const LOOK_CYCLE = [
  * `useMemo` keyed on `graph`; the React Compiler now caches the call on the
  * graph's identity, which is the same dependency.
  */
-function shotsFromGraph(graph: ReturnType<typeof useGraph>) {
+function shotsFromGraph(graph: ReturnType<typeof useGraph>, size: FilmStripSize) {
   const out: FilmStripShot[] = [];
   const ids = new Map<string, NodeId>();
   for (const id of documentOrder(graph)) {
@@ -96,7 +103,7 @@ function shotsFromGraph(graph: ReturnType<typeof useGraph>) {
       id,
       label: node.data.title,
       seconds: node.data.seconds,
-      frames: framesFor(node.data.media, node.data.seconds) ?? [
+      frames: framesFor(node.data.media, node.data.seconds, FRAME_SPAN_PX[size]) ?? [
         LOOK_CYCLE[out.length % LOOK_CYCLE.length] ?? "",
       ],
       sectionName,
@@ -106,18 +113,19 @@ function shotsFromGraph(graph: ReturnType<typeof useGraph>) {
   return { shots: out, clipIds: ids };
 }
 
-export function BoardFilmStrip() {
+export function BoardFilmStrip({ size }: Readonly<{ size: FilmStripSize }>) {
   const graph = useGraph();
   const anchor = useSelectionAnchor();
   const selection = useSelectionActions();
 
-  const { shots, clipIds } = shotsFromGraph(graph);
+  const { shots, clipIds } = shotsFromGraph(graph, size);
 
   if (shots.length === 0) return null;
 
   return (
     <FilmStrip
       standalone={false}
+      size={size}
       shots={shots}
       selectedId={anchor}
       onSelect={(id) => {
