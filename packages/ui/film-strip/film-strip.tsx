@@ -281,12 +281,45 @@ export function FilmStrip({
     if (value !== playing) onTogglePlay?.();
   };
   const activeId = selectedId ?? ownSelectedId;
+  // The last selection this strip made ITSELF, by a tap. The follow below
+  // leaves that one alone: a tap has already put the playhead where it landed.
+  const selfSelectedRef = useRef<string | null>(null);
   const setSelected = (index: number) => {
     const shot = shots[index];
     if (shot === undefined) return;
+    selfSelectedRef.current = shot.id;
     if (selectedId === undefined) setOwnSelectedId(shot.id);
     onSelect?.(shot.id);
   };
+
+  // A SELECTION FROM OUTSIDE MOVES THE PLAYHEAD TO IT, as if its box had been
+  // tapped. The centring effect below already brings the box into view; this
+  // is the other half of a tap, so the playhead and the highlight agree about
+  // which clip is current instead of the highlight moving on its own.
+  //
+  // To the clip's START, where a tap lands wherever it was pressed: there is no
+  // press point to honour here, and the start is where the clip is.
+  //
+  // Keyed on the id it last followed, so a shot list that re-places (a trim, a
+  // clip taken out) does not drag the playhead back to a clip it already
+  // visited. A clip not placed yet is followed once it is.
+  const followedIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (activeId === null || activeId === undefined) {
+      followedIdRef.current = null;
+      return;
+    }
+    if (followedIdRef.current === activeId) return;
+    if (selfSelectedRef.current === activeId) {
+      selfSelectedRef.current = null;
+      followedIdRef.current = activeId;
+      return;
+    }
+    const shot = shots.find((candidate) => candidate.id === activeId);
+    if (shot === undefined) return;
+    followedIdRef.current = activeId;
+    setTime(shot.start);
+  }, [activeId, shots, setTime]);
   const [trimming, setTrimming] = useState<Trimming | null>(null);
   const trimmingRef = useRef<Trimming | null>(null);
 

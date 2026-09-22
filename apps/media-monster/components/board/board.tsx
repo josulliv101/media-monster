@@ -1,8 +1,16 @@
 "use client";
 
 import { createContext, use, useId, useState, useSyncExternalStore } from "react";
-import { getNode, parseNodeId } from "@josulliv101/nested-collections";
-import { Redo2, Undo2 } from "lucide-react";
+import {
+  documentOrder,
+  getNode,
+  getParent,
+  parseNodeId,
+  tryParseNodeId,
+  type NodeId,
+} from "@josulliv101/nested-collections";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { ChevronRight, Focus, Redo2, Undo2 } from "lucide-react";
 
 import {
   NodeSlot,
@@ -170,6 +178,40 @@ function ClipPicture({ media, seconds }: Readonly<{ media: ClipMedia | null; sec
  */
 const BoardLayoutContext = createContext<BoardLayout>("grid");
 
+/**
+ * WHICH COLLECTION IS STANDING IN FOR THE ROOT, and how to change it.
+ *
+ * "Go to" on a collection makes it the top of the board: everything above it
+ * goes, everything inside it stays. Context for the reason the layout is: the
+ * cards are rendered by the engine's `NodeSlot` and cannot be handed props.
+ * `focus(null)` goes back to the real root.
+ */
+type BoardFocus = Readonly<{
+  shownRootId: NodeId | null;
+  focus: (id: NodeId | null) => void;
+}>;
+const BoardFocusContext = createContext<BoardFocus>({
+  shownRootId: null,
+  focus: () => undefined,
+});
+
+/**
+ * The collection named in the URL, if it is one this board can show.
+ *
+ * NOT TRUSTED: it came from the address bar. An id that does not parse, does
+ * not exist, or names a clip or a sealed node falls back to the real root
+ * rather than rendering a board with nothing on it — which is also what a
+ * bookmark into a B-roll folder does after a reload, since loaded children do
+ * not survive one.
+ */
+function resolveFocus(graph: ReturnType<typeof useGraph>, raw: string | null): NodeId | null {
+  if (raw === null) return null;
+  const parsed = tryParseNodeId(raw);
+  if (!parsed.ok) return null;
+  const node = getNode(graph, parsed.value);
+  return node !== undefined && !node.sealed && node.kind === "collection" ? parsed.value : null;
+}
+
 /** A clip card's width in a row, where the grid's `1fr` has no meaning: the
  *  cards run off the edge instead of sharing the width. */
 const ROW_CARD_WIDTH = "w-56";
@@ -279,7 +321,10 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   // STARTS CLOSED, so the board opens as an outline — every collection a bar
   // you can open — rather than a wall of cards. The ROOT is the exception: it
   // is the board itself, and closing it would leave one bar on an empty page.
-  const isRoot = graph.rootIds.includes(id);
+  // "Root" means whatever the board is SHOWING as its root: after "go to", the
+  // collection you went to opens, and everything inside it starts closed.
+  const { shownRootId, focus } = use(BoardFocusContext);
+  const isRoot = id === (shownRootId ?? graph.rootIds[0]);
   const [collapsed, setCollapsed] = useState(!isRoot);
   const bodyId = useId();
 
@@ -357,8 +402,10 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
           shrinking anything's natural width) and pads back by the same 6px,
           so the text sits exactly where the padding put it. The hover tint and
           focus ring then read as the bar, not as a tight box round the name. */}
-      <header className={cn("-mx-1.5 -mt-1.5", collapsed ? "-mb-1.5" : "mb-0.5")}>
-        <h3 className="text-sm font-semibold text-zinc-100">
+      <header
+        className={cn("-mx-1.5 -mt-1.5 flex items-stretch gap-1", collapsed ? "-mb-1.5" : "mb-0.5")}
+      >
+        <h3 className="min-w-0 flex-1 text-sm font-semibold text-zinc-100">
           <button
             type="button"
             aria-expanded={!collapsed}
@@ -389,6 +436,22 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
             ) : null}
           </button>
         </h3>
+        {/* GO TO: make this collection the top of the board. Its own button
+            beside the duration rather than part of the bar, because the bar
+            already means "open or close", and a click cannot mean both. Not on
+            the collection that is already the top — there is nowhere to go. */}
+        {isRoot ? null : (
+          <button
+            type="button"
+            aria-label={`Go to ${data.name}`}
+            title={`Go to ${data.name}: show it, and everything inside it, on its own`}
+            data-collection-focus
+            onClick={() => focus(id)}
+            className="flex shrink-0 items-center rounded-lg px-2 text-zinc-500 transition-colors hover:bg-zinc-800/60 hover:text-zinc-100 focus-visible:bg-zinc-800/60 focus-visible:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500"
+          >
+            <Focus className="size-4" aria-hidden="true" />
+          </button>
+        )}
       </header>
 
       {/* Always in the DOM so `aria-controls` names something; its contents
@@ -559,11 +622,9 @@ export function Board({
   // The fixture reloads, so unsaved edits go with it, as they would on reload.
   if (built.builtBy !== engine) setBuilt(buildStore());
   const { store, sealed } = built;
-  const rootId = parseNodeId(FIXTURE_ROOT_ID);
 
   return (
     <Provider store={store}>
-      {/* The layout every collection below reads; see `BoardLayoutContext`. */}
       {/* SEALING IS A SUCCESS PATH, so `ok: true` alone would have said nothing.
           A node whose kind this app does not know keeps its bytes and stays
           movable, and the board simply renders fewer cards than the document
@@ -574,10 +635,60 @@ export function Board({
           by this version and {sealed.length === 1 ? "is" : "are"} held as-is.
         </p>
       ) : null}
-      <Toolbar rootId={rootId} />
-      <BoardLayoutContext value={boardLayout}>
-        <NodeSlot id={rootId} />
-      </BoardLayoutContext>
+      <BoardBody boardLayout={boardLayout} filmStripSize={filmStripSize} />
+    </Provider>
+  );
+}
+
+/**
+ * Everything under the store's Provider, which is where the graph can be read.
+ *
+ * SPLIT FROM `Board` for that reason: "go to" has to check the URL's id against
+ * the live graph (a folder that was just read in is a valid target, and one that
+ * was deleted is not), and only a component inside the Provider can subscribe.
+ */
+function BoardBody({
+  boardLayout,
+  filmStripSize,
+}: Readonly<{ boardLayout: BoardLayout; filmStripSize: FilmStripSize }>) {
+  const graph = useGraph();
+  const router = useRouter();
+  const pathname = usePathname();
+  const params = useSearchParams();
+  const topId = parseNodeId(FIXTURE_ROOT_ID);
+
+  // IN THE URL, so the browser's Back button goes back up, and a link to a
+  // collection opens on it. `?focus=` naming the real root, or nothing valid,
+  // is the whole board.
+  const selection = useSelectionActions();
+  const focusedId = resolveFocus(graph, params.get("focus"));
+  const shownRootId = focusedId ?? topId;
+  const focus = (id: NodeId | null) => {
+    router.push(
+      id === null || id === topId ? pathname : `${pathname}?focus=${encodeURIComponent(id)}`,
+    );
+    // THE STRIP FOLLOWS, as if the collection's first clip had been tapped:
+    // selecting it centres its box and puts the playhead on its first frame.
+    // Done here, on the gesture, rather than whenever the URL changes — Back
+    // and a link opened cold are not somebody asking to go there now.
+    const first = firstClipInStrip(graph, id ?? topId);
+    if (first !== null) selection.set([first]);
+  };
+
+  return (
+    <>
+      {/* The REEL's controls: undo, redo and the running time stay about the
+          whole document wherever the board is looking. */}
+      <Toolbar rootId={topId} />
+      {focusedId === null ? null : <FocusTrail shownRootId={focusedId} onGo={focus} />}
+      <BoardFocusContext value={{ shownRootId, focus }}>
+        <BoardLayoutContext value={boardLayout}>
+          {/* KEYED on the root it shows, so going somewhere is a fresh view:
+              the new top opens and everything inside it starts closed, rather
+              than inheriting whatever state that card had deeper in the tree. */}
+          <NodeSlot key={shownRootId} id={shownRootId} />
+        </BoardLayoutContext>
+      </BoardFocusContext>
       {/* PINNED TO THE BOTTOM OF THE VIEWPORT. The strip is the reel's timeline,
           so it stays in reach while the board scrolls above it. `sticky` rather
           than `fixed`: it keeps its place in the page's width (beside the rail,
@@ -587,6 +698,79 @@ export function Board({
       <div className="sticky bottom-0 z-40 mt-6 bg-zinc-950 pt-3 pb-4 max-md:-mx-2">
         <BoardFilmStrip size={filmStripSize} />
       </div>
-    </Provider>
+    </>
+  );
+}
+
+/**
+ * The first clip under `rootId`, in document order, that the film strip shows.
+ *
+ * ACTIVE ONLY, because the strip leaves inactive clips out: selecting one would
+ * highlight a card the strip has no box for, and the strip would not move. A
+ * collection with nothing in the strip — all inactive, or not read yet — gives
+ * `null`, and the strip stays where it is.
+ */
+function firstClipInStrip(graph: ReturnType<typeof useGraph>, rootId: NodeId): NodeId | null {
+  const inside = (id: NodeId): boolean => {
+    for (let at: NodeId | null = id; at !== null; at = getParent(graph, at)) {
+      if (at === rootId) return true;
+    }
+    return false;
+  };
+  for (const id of documentOrder(graph)) {
+    const node = getNode(graph, id);
+    if (node === undefined || node.sealed || node.kind !== "clip" || !node.data.active) continue;
+    if (inside(id)) return id;
+  }
+  return null;
+}
+
+/**
+ * The way back up: every collection from the real root down to the one being
+ * shown, each a link to go there. Only drawn while the board is focused.
+ */
+function FocusTrail({
+  shownRootId,
+  onGo,
+}: Readonly<{ shownRootId: NodeId; onGo: (id: NodeId | null) => void }>) {
+  const graph = useGraph();
+  const chain: NodeId[] = [];
+  for (let at: NodeId | null = shownRootId; at !== null; at = getParent(graph, at)) {
+    chain.unshift(at);
+  }
+  return (
+    <nav aria-label="Breadcrumb" className="mb-3">
+      <ol className="flex flex-wrap items-center gap-1 text-sm">
+        {chain.map((crumbId, index) => {
+          const node = getNode(graph, crumbId);
+          const name =
+            node !== undefined && !node.sealed && node.kind === "collection"
+              ? node.data.name
+              : crumbId;
+          const current = index === chain.length - 1;
+          return (
+            <li key={crumbId} className="flex min-w-0 items-center gap-1">
+              {index === 0 ? null : (
+                <ChevronRight className="size-3.5 shrink-0 text-zinc-600" aria-hidden="true" />
+              )}
+              {current ? (
+                <span aria-current="page" className="truncate px-1 font-semibold text-zinc-100">
+                  {name}
+                </span>
+              ) : (
+                <button
+                  type="button"
+                  data-focus-crumb
+                  onClick={() => onGo(crumbId)}
+                  className="truncate rounded px-1 text-zinc-400 transition-colors hover:bg-zinc-800/60 hover:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500"
+                >
+                  {name}
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
   );
 }
