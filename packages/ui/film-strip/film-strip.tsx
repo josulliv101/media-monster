@@ -375,7 +375,7 @@ export function FilmStrip({
    * than yanked back, which is what made this worth a guard rather than a
    * `scrollIntoView`.
    */
-  const centredForRef = useRef<{ id: string; at: number } | null>(null);
+  const centredForRef = useRef<{ id: string; at: number; width: number } | null>(null);
   useEffect(() => {
     const viewport = viewportRef.current;
     const content = contentRef.current;
@@ -420,12 +420,23 @@ export function FilmStrip({
       const view = viewport.getBoundingClientRect();
       const centre = rect.x - view.x + viewport.scrollLeft + rect.width / 2;
 
+      // THE VIEWPORT'S WIDTH IS PART OF "ALREADY CENTRED". `centre` is in
+      // content coordinates, which a resize does not move, so a guard on the id
+      // and the centre alone returned for every resize — the observer below
+      // fired and did nothing. Measured: centred at 1000 px wide, 200 px off
+      // after narrowing to 600 px.
+      const width = viewport.clientWidth;
       const previous = centredForRef.current;
-      if (previous !== null && previous.id === activeId && Math.abs(previous.at - centre) < 1) {
+      if (
+        previous !== null &&
+        previous.id === activeId &&
+        Math.abs(previous.at - centre) < 1 &&
+        previous.width === width
+      ) {
         return;
       }
       const first = previous === null;
-      centredForRef.current = { id: activeId, at: centre };
+      centredForRef.current = { id: activeId, at: centre, width };
       viewport.scrollTo({
         left: clamp(centre - viewport.clientWidth / 2, 0, furthest),
         // A re-place is a correction, not a journey: animating each settling
@@ -667,6 +678,11 @@ export function FilmStrip({
 
       const viewport = viewportRef.current;
       if (viewport === null) return;
+      // THE TRIM BELONGS TO THIS POINTER. The listeners below are on `window`,
+      // which hears every pointer — so a second finger lifting elsewhere was a
+      // release of THIS drag. Measured: touch 1 at a 5 s preview, touch 2's
+      // lift committed about 3 s while touch 1 was still down.
+      const pointerId = event.pointerId;
       const source = shot.sourceSeconds;
       const trimIn = shot.trimInSeconds;
       const used = shot.seconds;
@@ -747,6 +763,7 @@ export function FilmStrip({
       };
 
       const move = (moveEvent: PointerEvent) => {
+        if (moveEvent.pointerId !== pointerId) return;
         const at = measure(moveEvent.clientX);
         const next: Trimming = {
           index,
@@ -773,6 +790,7 @@ export function FilmStrip({
         return moved;
       };
       const up = (upEvent: PointerEvent) => {
+        if (upEvent.pointerId !== pointerId) return;
         // A press that never travelled is not an edit. Committing one would put
         // an identical window on the undo stack for every accidental tap.
         if (!stop()) return;
@@ -786,7 +804,8 @@ export function FilmStrip({
       // window losing focus — COMMITTED the length the drag happened to be at.
       // Cancel means the gesture did not happen; the preview goes and nothing
       // is written.
-      const cancel = () => {
+      const cancel = (cancelEvent: PointerEvent) => {
+        if (cancelEvent.pointerId !== pointerId) return;
         stop();
       };
       window.addEventListener("pointermove", move);
@@ -971,6 +990,27 @@ export function FilmStrip({
     scrubbingRef.current = false;
   };
 
+  /**
+   * A CANCELLED GESTURE DID NOT HAPPEN.
+   *
+   * This used to be `onPointerUp`, so everything a release does ran on a cancel
+   * too: a press the browser took over to scroll still SELECTED and SEEKED
+   * (measured: `select:b` and `scrub:6.00`), and a cancelled pan was FLUNG
+   * (240 px became 684 px). The trim handle learned this already; the strip
+   * had not. Tear the gesture down — pan, scrub, styling, skim card — and do
+   * none of the release's work.
+   */
+  const onPointerCancel = () => {
+    if (panRef.current !== null) {
+      stripRef.current?.classList.remove("panning");
+      panRef.current = null;
+    }
+    if (scrubbingRef.current) onSkim?.(null);
+    scrubbingRef.current = false;
+    setHot(false);
+    setGhostX(null);
+  };
+
   const onPointerLeave = () => {
     setHot(false);
     setGhostX(null);
@@ -1026,6 +1066,24 @@ export function FilmStrip({
 
   /* ── playback ───────────────────────────────────────────────────────── */
 
+  // WHAT THE FRAME LOOP READS, refreshed after every render.
+  //
+  // The loop is keyed on `playing` so the timer is not torn down on every
+  // clock tick — but that froze `DUR`, `setTime` and `setPlaying` at the render
+  // that pressed play. Measured: a sequence shortened from 20 s to 0.25 s mid-
+  // playback read 1.04 s a moment later, an extended one stopped at its old
+  // end, and a replaced `onScrub` was never called. The loop now reads the
+  // current ones through this ref on every frame.
+  //
+  // Assigned in an effect, not during render: writing a ref while rendering
+  // breaks the Rules of React, and the React Compiler would skip the component.
+  // Declared ABOVE the loop so, on the render that starts playback, it is
+  // current before the loop's first frame.
+  const latestRef = useRef({ DUR, setTime, setPlaying });
+  useEffect(() => {
+    latestRef.current = { DUR, setTime, setPlaying };
+  });
+
   useEffect(() => {
     if (!playing) return;
     let last = performance.now();
@@ -1033,11 +1091,12 @@ export function FilmStrip({
     const step = (now: number) => {
       const next = (now - last) / 1000;
       last = now;
-      setTime((current) => {
+      const { DUR: end, setTime: moveTo, setPlaying: playTo } = latestRef.current;
+      moveTo((current) => {
         const value = current + next;
-        if (value >= DUR) {
-          setPlaying(false);
-          return DUR;
+        if (value >= end) {
+          playTo(false);
+          return end;
         }
         // Follow: keep the playhead in view without re-centring on every frame.
         const viewport = viewportRef.current;
@@ -1171,7 +1230,7 @@ export function FilmStrip({
                 onPointerDown={onPointerDown}
                 onPointerMove={onPointerMove}
                 onPointerUp={onPointerUp}
-                onPointerCancel={onPointerUp}
+                onPointerCancel={onPointerCancel}
                 onPointerLeave={onPointerLeave}
               >
                 <div data-seam-lane className="lane" ref={laneRef}>
