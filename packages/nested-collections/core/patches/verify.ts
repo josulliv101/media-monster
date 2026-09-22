@@ -262,8 +262,20 @@ function verifyMoved<Ts extends readonly WidenedNodeType[], S>(
   // whole patch would produce, which is also why it runs once at the end
   // rather than per move: the moves are atomic, and an intermediate state that
   // rings is fine as long as the result does not.
-  const nextParent = new Map<NodeId, NodeId | null>(graph.parentById);
-  for (const move of moves) nextParent.set(move.nodeId, move.toParentId);
+  //
+  // AN OVERLAY, NOT A COPY. This built the post-state as
+  // `new Map(graph.parentById)` plus the moves, which copied every parent
+  // entry in the document on every undo and redo: 2n + 30 Map operations for a
+  // one-node reorder, counted at 100 / 1,000 / 10,000 nodes (230 / 2,030 /
+  // 20,030). The moves are all that differ, so they are all that is stored;
+  // every other lookup reads the graph's own map.
+  const movedTo = new Map<NodeId, NodeId | null>();
+  for (const move of moves) movedTo.set(move.nodeId, move.toParentId);
+  const parentPost = (id: NodeId): NodeId | null | undefined =>
+    movedTo.has(id) ? movedTo.get(id) : graph.parentById.get(id);
+  // The copy's size bounded the walks below. This is at least that: the
+  // post-state's entries are the graph's plus any moved id it did not hold.
+  const parentEntryBound = graph.parentById.size + movedTo.size;
 
   for (const move of moves) {
     // Bounded by the map rather than trusted to terminate: a pre-state cycle
@@ -279,14 +291,14 @@ function verifyMoved<Ts extends readonly WidenedNodeType[], S>(
           { nodeId: move.nodeId, parentId: move.toParentId },
         );
       }
-      if (++steps > nextParent.size) {
+      if (++steps > parentEntryBound) {
         return replayError(
           "would-create-cycle",
           `The parent chain above ${move.toParentId} does not terminate.`,
           { nodeId: move.nodeId, parentId: move.toParentId },
         );
       }
-      cursor = nextParent.get(cursor);
+      cursor = parentPost(cursor);
     }
   }
 
@@ -295,8 +307,8 @@ function verifyMoved<Ts extends readonly WidenedNodeType[], S>(
   //
   // AGAINST THE POST-STATE, for the reason phase 3 is: a batch can move a node
   // under a parent that is itself moving, and the pre-state chain answers a
-  // question about a graph the patch is about to replace. `nextParent` is the
-  // map phase 3 just proved terminates, so the walk below needs no budget of
+  // question about a graph the patch is about to replace. `parentPost` reads the
+  // post-state phase 3 just proved terminates, so the walk below needs no budget of
   // its own beyond the one it inherits.
   //
   // `depthPost(toParentId) + subtreeHeight(graph, nodeId)` is verbatim the
@@ -324,9 +336,9 @@ function verifyMoved<Ts extends readonly WidenedNodeType[], S>(
           depth = hit;
           break;
         }
-        if (path.length > nextParent.size) return null;
+        if (path.length > parentEntryBound) return null;
         path.push(cursor);
-        cursor = nextParent.get(cursor) ?? null;
+        cursor = parentPost(cursor) ?? null;
       }
       // Back down the path it just walked up, so a batch sharing one chain pays
       // for it once.
