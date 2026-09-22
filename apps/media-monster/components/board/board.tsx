@@ -10,7 +10,7 @@ import {
   type NodeId,
 } from "@josulliv101/nested-collections";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ChevronRight, Film, Focus, Folder, Redo2, Undo2 } from "lucide-react";
+import { Archive, ChevronRight, Film, Focus, Redo2, Undo2 } from "lucide-react";
 
 import {
   NodeSlot,
@@ -447,8 +447,30 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
             className="group flex w-full items-baseline justify-between gap-3 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-zinc-800/60 focus-visible:bg-zinc-800/60 focus-visible:outline-2 focus-visible:outline-sky-500"
           >
             <span className="flex min-w-0 items-center gap-1.5">
-              {/* Points right when closed and down when open; brightens with
-                  the bar on hover and focus. */}
+              {/* IN THE STRIP OR NOT, AT A GLANCE, and FIRST in the row: a film icon
+                  while this branch plays, an archive box when it does not — a row holding
+                  material rather than part of the cut. A little more room after
+                  it (mr-1 on top of the gap) than between the name and the
+                  triangle, so the icon reads as a marker rather than a letter. The name and
+                  the triangle are NOT dimmed: the row is still a row you open
+                  and read. The switch carries the state for assistive tech, so
+                  the icon is decorative. */}
+              {on ? (
+                <Film
+                  data-collection-in-cut
+                  aria-hidden="true"
+                  className="mr-1 size-3.5 shrink-0 text-zinc-300"
+                />
+              ) : (
+                <Archive
+                  data-collection-out-of-cut
+                  aria-hidden="true"
+                  className="mr-1 size-3.5 shrink-0 text-zinc-300"
+                />
+              )}
+              <span className="truncate">{data.name}</span>
+              {/* AFTER THE NAME. Points right when closed and down when open;
+                  brightens with the bar on hover and focus. */}
               <svg
                 viewBox="0 0 10 10"
                 aria-hidden="true"
@@ -459,26 +481,6 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
               >
                 <path d="M2.5 1 L8.5 5 L2.5 9 Z" />
               </svg>
-              <span className="truncate">{data.name}</span>
-              {/* IN THE STRIP OR NOT, AT A GLANCE: a film icon beside the name
-                  while this branch plays, a folder when it does not — a row
-                  holding material rather than part of the cut. The name and
-                  the triangle are NOT dimmed: the row is still a row you open
-                  and read. The switch carries the state for assistive tech, so
-                  the icon is decorative. */}
-              {on ? (
-                <Film
-                  data-collection-in-cut
-                  aria-hidden="true"
-                  className="size-3.5 shrink-0 text-zinc-300"
-                />
-              ) : (
-                <Folder
-                  data-collection-out-of-cut
-                  aria-hidden="true"
-                  className="size-3.5 shrink-0 text-zinc-300"
-                />
-              )}
             </span>
             {total ? (
               <span className="shrink-0 text-base font-normal">
