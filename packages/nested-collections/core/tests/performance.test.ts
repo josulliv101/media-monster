@@ -25,13 +25,14 @@
 //      asserted by measuring it at 100, 1,000 and 10,000 nodes and requiring
 //      the three numbers to be EQUAL — a per-size bound cannot tell a constant
 //      apart from a number that happens to be small.
-//   2. TIME RATIOS BETWEEN SIZES, against a CALIBRATED ceiling. A 10x graph
-//      makes a linear operation ~10x slower in theory and 13-20x slower in
-//      practice, because allocation and GC cost more per node at scale. So the
-//      ceiling is not a guessed constant: a deliberately-linear reference is
-//      timed on the same fixtures in the same process, and every ratio is held
-//      to that plus slack, re-sampled per assertion. See
-//      `measureLinearReferenceGrowth`.
+//   2. MAP WORK BETWEEN SIZES. Where a cost is ALLOWED to grow with the
+//      graph (the engine is copy-on-write, so a command copies the Maps it
+//      changes), `countMapWork` counts every Map operation the call makes and
+//      the growth from 1,000 to 10,000 nodes is held to 10x: linear with any
+//      fixed overhead grows by less, a quadratic by ~100x. Exact counts, so
+//      there is no calibration and no slack. This replaced time ratios against
+//      a calibrated ceiling, which flaked on shared runners five times and
+//      once passed a real regression; section 12 has the record.
 //
 // The one thing it does NOT assert is that any operation is FAST. Absolute
 // numbers are printed at the end of the run (see `afterAll`) so a human can
@@ -115,6 +116,64 @@ function countOnce(run: () => void): Readonly<Counters> {
   resetCounters();
   run();
   return { ...counters };
+}
+
+/**
+ * MAP WORK, COUNTED: every `get`, `set`, `has` and `delete` on any Map, and
+ * every entry any Map iteration yields, while `run` executes.
+ *
+ * The engine's state is Maps, so this is the work an operation does on it,
+ * with no timing component: the same code over the same fixture gives the same
+ * number on a laptop or a loaded CI runner. It needs no hook in production
+ * code — it patches `Map.prototype` for the length of one call and restores it.
+ *
+ * A COPY IS COUNTED. `new Map(existing)` looks up `set` on the new map and
+ * iterates the source through `Symbol.iterator` (spec: AddEntriesFromIterable),
+ * so patching the prototype takes it off the engine's fast path and every
+ * copied entry is seen. What this does NOT see is work on arrays and plain
+ * objects; children arrays are bounded by the fixture's fan-out, so a scan
+ * that grows with the graph has to go through a Map to reach the nodes.
+ */
+function countMapWork(run: () => void): number {
+  const proto = Map.prototype as unknown as Record<PropertyKey, unknown>;
+  const names: PropertyKey[] = ["get", "set", "has", "delete", "forEach", "entries", "keys", "values", Symbol.iterator];
+  const saved = new Map<PropertyKey, unknown>();
+  let work = 0;
+  const countYields = <T,>(it: Iterator<T>): IterableIterator<T> => ({
+    next() {
+      const step = it.next();
+      if (step.done !== true) work += 1;
+      return step;
+    },
+    [Symbol.iterator]() {
+      return this;
+    },
+  });
+  for (const name of names) {
+    const original = proto[name] as (...args: unknown[]) => unknown;
+    saved.set(name, original);
+    if (name === "forEach") {
+      proto[name] = function (this: Map<unknown, unknown>, ...args: unknown[]) {
+        work += this.size;
+        return original.apply(this, args);
+      };
+    } else if (name === "entries" || name === "keys" || name === "values" || name === Symbol.iterator) {
+      proto[name] = function (this: Map<unknown, unknown>) {
+        return countYields(original.call(this) as Iterator<unknown>);
+      };
+    } else {
+      proto[name] = function (this: Map<unknown, unknown>, ...args: unknown[]) {
+        work += 1;
+        return original.apply(this, args);
+      };
+    }
+  }
+  try {
+    run();
+  } finally {
+    for (const [name, original] of saved) proto[name] = original;
+  }
+  return work;
 }
 
 /** Total fold-callback invocations — the number of nodes a fold actually
@@ -629,12 +688,18 @@ type CountSample = Readonly<{
 const samples: Sample[] = [];
 const countSamples: CountSample[] = [];
 
-function measure(
+/**
+ * Time `run` for the printed table, and RETURN ITS MAP WORK, which is what the
+ * scaling assertions are written against. The timing is for a human to read at
+ * the end of the run; nothing fails on it.
+ */
+function measureWork(
   op: string,
   fixtureLabel: string,
   nodeCount: number,
   run: () => void,
 ): number {
+  const work = countMapWork(run);
   const timing = timeOp(run);
   samples.push({
     op,
@@ -643,7 +708,7 @@ function measure(
     nsPerOp: timing.nsPerOp,
     opsPerBatch: timing.opsPerBatch,
   });
-  return timing.nsPerOp;
+  return work;
 }
 
 function noteCount(
@@ -699,22 +764,6 @@ afterAll(() => {
     );
   }
   lines.push("");
-  // The RANGE, not a number: the reference is re-sampled at every assertion, so
-  // a single figure here would be the last one and would hide exactly the
-  // spread that made a module-load reference unusable.
-  if (observedReferences.length === 0) {
-    lines.push("linear reference (serialize, 1k -> 10k): not sampled this run");
-  } else {
-    const lo = Math.min(...observedReferences);
-    const hi = Math.max(...observedReferences);
-    lines.push(
-      `linear reference (serialize, 1k -> 10k), re-sampled per assertion: ` +
-        `${lo.toFixed(1)}x - ${hi.toFixed(1)}x over ${observedReferences.length} samples` +
-        `   |   ceiling = max(${SUBQUADRATIC_RATIO_LIMIT}, reference x ${LINEAR_REFERENCE_SLACK}) = ` +
-        `${Math.max(SUBQUADRATIC_RATIO_LIMIT, lo * LINEAR_REFERENCE_SLACK).toFixed(1)}x - ` +
-        `${Math.max(SUBQUADRATIC_RATIO_LIMIT, hi * LINEAR_REFERENCE_SLACK).toFixed(1)}x`,
-    );
-  }
   lines.push("");
   lines.push("Operation counts — exact, machine-independent");
   lines.push("=".repeat(78));
@@ -742,108 +791,19 @@ afterAll(() => {
 // ---------------------------------------------------------------------------
 
 /**
- * 10x the nodes. A LINEAR operation lands near 10 in theory — and near 13-20 in
- * practice, because at 10,000 nodes the allocator, the Map rehashing and the
- * garbage collector all cost more per node than they do at 1,000. That gap is
- * real and it is NOT algorithmic, which is why a fixed threshold here is a trap:
- * set it at 25 and this file fails on a busy machine, set it at 90 and a genuine
- * O(n^2) walks straight through.
+ * 10x the nodes, at most 10x the Map work.
  *
- * So the ceiling is calibrated instead — see `measureLinearReferenceGrowth`.
- * This is
- * the FLOOR under that calibration: a clean, fast box measures a linear
- * reference near 10, and nothing should be held to a tighter bound than this
- * whatever the reference says.
+ * THE THEORY ITSELF, NOT A TUNED NUMBER, because the counts are exact: an
+ * operation that does `a*n + b` Map operations with `b >= 0` grows by at most
+ * 10x between 1,000 and 10,000 nodes, and an O(n^2) one by ~100x. There is no
+ * noise to leave room for, so there is no slack.
  *
- * WAS 30, AND 30 FLAKED. The failure this number now encodes, measured rather
- * than argued: run this file ALONE and the linear reference measures ~16, so
- * `ref x SLACK` (40) is the binding ceiling and the calibration is doing its
- * job. Run it inside the real gate — `vitest --project=unit`, 55 files across
- * parallel workers — and the reference is measured at MODULE LOAD, in whatever
- * quiet moment the scheduler happened to give this worker, while `deserialize`
- * is measured later under full contention. Over 10 full-suite runs on a Windows
- * dev box the reference came back 9.1 / 10.2 / 10.6 / 10.9 / 11.0 / 11.5 / 11.7
- * — so `ref x 2.5` was 22.7-29.2, ALWAYS below 30, and the "calibrated" ceiling
- * was in practice this constant. `deserialize` over the same runs came back
- * 16.4 / 19.5 / 20.5 / 27.8 / 31.4 / 31.8 / 32.8. Three of ten breached 30.
- *
- * Note the direction: the two worst `deserialize` runs are paired with the two
- * LOWEST references. Contention that inflates the operation cannot inflate a
- * reference already taken, so under load the calibration moves the ceiling the
- * wrong way and the floor is all that is left. 40 clears the worst observed
- * ratio (31.8) by 26%, hands back over to the calibration as soon as the
- * reference exceeds 16 — i.e. on any box slower than this one — and a real
- * O(n^2), which is the reference times ~10, is nowhere near it.
- *
- * This is the coarse net, not the instrument. What actually pins `deserialize`
- * against an algorithmic regression is the exact `parse`-call count beside it
- * (one per node, at all three sizes), which no amount of machine noise moves.
+ * This section used to hold a calibrated WALL-CLOCK ceiling (a floor of 40, a
+ * linear reference re-timed per assertion, 2.5x slack) and a page of reasons
+ * each part was needed. Every part was a patch over the same flaw — two timings
+ * are not comparable on a shared runner — and section 12 records how it ended.
  */
-const SUBQUADRATIC_RATIO_LIMIT = 40;
-
-// There was a CAP here (`QUADRATIC_SIGNATURE_FLOOR = 60`), removed rather than
-// tuned. It read "a 10x graph making an operation more than 60x slower is not a
-// constant factor", which is true only while the linear reference is near 10.
-// Under a 20-way CPU burn the reference itself measured 48, and the cap then
-// fired on four operations at 60-76 whose ratio TO THAT REFERENCE was 1.25-1.6
-// — i.e. it called linear growth quadratic. An absolute ceiling over a relative
-// measurement cannot survive a machine slow enough to need the relative one.
-
-/** How much slack a real operation gets over the linear reference measured on
- *  the same fixtures, in the same process, on the same hardware. */
-const LINEAR_REFERENCE_SLACK = 2.5;
-
-/**
- * A DELIBERATELY LINEAR operation, timed on the same two fixtures every ratio
- * below is computed from.
- *
- * `serialize` emits one object per node and touches every one of them exactly
- * once, so its 1k -> 10k ratio is what "linear, on THIS machine, under THIS
- * memory pressure, right now" actually costs. Calibrating against it is what
- * lets the assertions below stay tight on a quiet box and stay quiet on a
- * loaded one, without anyone having to guess a number.
- *
- * MEASURED PER ASSERTION, ADJACENT IN TIME TO THE OPERATION IT CALIBRATES —
- * not once at module load, which is what it used to be and what made this file
- * flake. The whole claim of a calibrated ceiling is "linear, on this machine,
- * under this memory pressure, RIGHT NOW", and a reference taken at module load
- * is none of those things by the time the eighth test runs: under the real gate
- * (`vitest --project=unit`, 55 files across parallel workers) the reference was
- * sampled in whatever quiet moment this worker happened to get, while the
- * operation was timed later under contention. Measured that way over 10 runs,
- * the reference came back 9.1-11.7 while `deserialize` came back 16.4-32.8, and
- * — the tell — the two WORST operation samples were paired with the two LOWEST
- * references. Contention cannot inflate a number already taken, so the stale
- * reference moved the ceiling the wrong way exactly when it was needed most.
- *
- * Re-measuring here puts numerator and denominator in the same contention
- * window, which is the property that has always made the cold/warm fold ratio
- * below robust. Under a deliberate 20-way CPU burn on a 24-core box the
- * adjacent reference reads ~48 while the operations read 60-76 — a ratio of
- * 1.25-1.6, comfortably inside `LINEAR_REFERENCE_SLACK`, where the stale
- * reference had read 12 against an operation at 106.
- *
- * It costs two `timeOp` calls (~0.2-0.3s) per assertion site. That is the price
- * of a gate that does not fail on a busy machine.
- */
-function measureLinearReferenceGrowth(): number {
-  const small = timeOp(() => {
-    engine.serialize(wide1k.graph);
-  });
-  const large = timeOp(() => {
-    engine.serialize(wide10k.graph);
-  });
-  return large.nsPerOp / small.nsPerOp;
-}
-
-/** Every reference actually sampled this run, so the summary can print the
- *  spread rather than one number that was only true once. */
-const observedReferences: number[] = [];
-
-/** How much cheaper a fully-warm fold must be than a cold one. The measured
- *  number is three orders of magnitude; this is the floor a regression has to
- *  break before anyone hears about it. */
-const WARM_FOLD_SPEEDUP_FLOOR = 20;
+const LINEAR_GROWTH_LIMIT = 10;
 
 // ---------------------------------------------------------------------------
 // 7. Operation builders
@@ -950,8 +910,8 @@ function assertProducesWork(
   expect(applied.ok).toBe(true);
 }
 
-/** ns/op at 10k divided by ns/op at 1k — the 10x-size ratio every scaling
- *  assertion in this file is written against. */
+/** Map work at 10k divided by Map work at 1k — the 10x-size ratio every
+ *  scaling assertion in this file is written against. */
 function growth(perOp: ReadonlyMap<string, number>): number {
   const small = perOp.get(wide1k.label);
   const large = perOp.get(wide10k.label);
@@ -962,60 +922,25 @@ function growth(perOp: ReadonlyMap<string, number>): number {
 }
 
 /**
- * The one time-based assertion in this file, written once so every caller gets
- * the same calibration and the same failure message.
- *
- * The ceiling is the linear reference plus slack, floored so a fast box cannot
- * make it absurdly tight and capped so a slow one cannot make it useless. The
- * message carries the reference, because "this got 22x slower" is not
- * actionable on its own and "this got 22x slower while a linear operation on
- * the same data got 19x slower" is.
+ * A cost that may grow with the graph, held to growing no faster than it: at
+ * most `LINEAR_GROWTH_LIMIT` for 10x the nodes. Reads the wide 1k and 10k
+ * samples; see `expectLinearWorkRatio` for a pair that is not those.
  */
-function expectSubQuadratic(perOp: ReadonlyMap<string, number>, what: string): void {
-  expectSubQuadraticRatio(growth(perOp), what);
+function expectLinearWork(work: ReadonlyMap<string, number>, what: string): void {
+  expectLinearWorkRatio(growth(work), what);
 }
 
 /**
- * The same gate, for a measurement whose two samples are NOT the wide 1k/10k
- * fixtures.
- *
- * `growth` reads those two labels specifically, which is right for everything
- * that scales with NODE COUNT. A multi-select delete does not: its cost is
- * driven by how many SIBLINGS one parent holds, and the wide fixture caps that
- * at `WIDE_FANOUT`. Split out rather than duplicated so both callers share one
- * calibration and one failure message.
+ * The same bound, for a pair of samples that are NOT the wide 1k/10k fixtures.
+ * A multi-select delete scales with how many SIBLINGS one parent holds, which
+ * the wide fixture caps at `WIDE_FANOUT`, so it brings its own two sizes.
  */
-function expectSubQuadraticRatio(ratio: number, what: string): void {
-  // Sampled HERE, immediately after the operation above, so a slow stretch of
-  // wall clock inflates both or neither.
-  const reference = measureLinearReferenceGrowth();
-  observedReferences.push(reference);
-  // NO ABSOLUTE CAP over the calibration. There used to be one — 60, reasoned
-  // from "a quadratic lands near 100" — and under a 20-way CPU burn it was the
-  // sole cause of four failures: the reference itself measured 48, so the cap
-  // was asserting that a provably LINEAR operation had grown quadratically.
-  // "Quadratic" is only meaningful relative to what linear costs right now,
-  // which is what `reference` is, and `LINEAR_REFERENCE_SLACK` already states
-  // the whole claim: no more than 2.5x the growth of an operation known to be
-  // linear over the same two fixtures. A genuine O(n^2) is `reference` x ~10.
-  //
-  // The residual risk is the other direction — a reference inflated by a GC
-  // pause raises the ceiling and lets a regression through for one run. That
-  // trade is deliberate: a missed regression is recoverable and this file's ten
-  // exact operation-COUNT assertions catch algorithmic change with no timing
-  // component at all, whereas a gate that fails on a busy machine gets muted.
-  const ceiling = Math.max(
-    SUBQUADRATIC_RATIO_LIMIT,
-    reference * LINEAR_REFERENCE_SLACK,
-  );
+function expectLinearWorkRatio(ratio: number, what: string): void {
   expect(
     ratio,
-    `${what}: 10x the nodes made it ${ratio.toFixed(1)}x slower. ` +
-      `A linear reference on the same fixtures, timed immediately afterwards, ` +
-      `moved ${reference.toFixed(1)}x, so the ceiling was ${ceiling.toFixed(1)}x.`,
-  ).toBeLessThan(ceiling);
+    `${what}: 10x the nodes did ${ratio.toFixed(2)}x the Map work; ${LINEAR_GROWTH_LIMIT}x is linear`,
+  ).toBeLessThanOrEqual(LINEAR_GROWTH_LIMIT);
 }
-
 
 /**
  * The strongest claim this file can make, and the only one that survives being
@@ -1048,7 +973,7 @@ function expectIndependentOfGraphSize(
 // ---------------------------------------------------------------------------
 
 describe("deserialize", () => {
-  it("parses each node exactly once and scales sub-quadratically", () => {
+  it("parses each node exactly once and does linear Map work", () => {
     const perOp = new Map<string, number>();
 
     for (const fx of wideSizes) {
@@ -1082,13 +1007,14 @@ describe("deserialize", () => {
 
       perOp.set(
         fx.label,
-        measure("deserialize", fx.label, fx.nodeCount, () => {
+        measureWork("deserialize", fx.label, fx.nodeCount, () => {
           engine.deserialize(fx.doc);
         }),
       );
     }
 
-    expectSubQuadratic(perOp, "deserialize");
+    // ~24 Map operations per node (2,436 / 24,165 / 241,452).
+    expectLinearWork(perOp, "deserialize");
   }, 120_000);
 });
 
@@ -1136,7 +1062,7 @@ describe("mutations", () => {
 
       perOp.set(
         fx.label,
-        measure("reorder (same parent)", fx.label, fx.nodeCount, () => {
+        measureWork("reorder (same parent)", fx.label, fx.nodeCount, () => {
           engine.applyCommand(fx.graph, command);
         }),
       );
@@ -1145,7 +1071,7 @@ describe("mutations", () => {
       expect(engine.resolveDrop(fx.graph, intent).ok).toBe(true);
       resolvePerOp.set(
         fx.label,
-        measure("resolveDrop (same parent)", fx.label, fx.nodeCount, () => {
+        measureWork("resolveDrop (same parent)", fx.label, fx.nodeCount, () => {
           engine.resolveDrop(fx.graph, intent);
         }),
       );
@@ -1161,14 +1087,16 @@ describe("mutations", () => {
     );
     expect(perReorder).toBeLessThanOrEqual(WIDE_FANOUT + 1);
 
-    // Time still grows, and that is worth stating plainly rather than hiding
-    // behind the count above: `applyMoved` copies `subtreeRevById`, which holds
-    // one entry per NODE, so the wall clock of a reorder tracks the document
-    // even though the re-indexing does not. The printed table shows it.
-    expectSubQuadratic(perOp, "same-parent reorder");
-    // `resolveDrop` walks document order once to rank the moved ids. Same
-    // guard: linear is the cost, quadratic is the regression.
-    expectSubQuadratic(resolvePerOp, "resolveDrop (same parent)");
+    // The Map work still grows, and that is worth stating plainly rather than
+    // hiding behind the count above: `applyMoved` copies `subtreeRevById`,
+    // which holds one entry per NODE, so a reorder's work tracks the document
+    // even though the re-indexing does not (321 / 2,207 / 21,065).
+    expectLinearWork(perOp, "same-parent reorder");
+    // `resolveDrop` does NOT track it. This comment used to say it walked
+    // document order to rank the moved ids; `inDocumentOrder` has since gained
+    // a one-parent fast path (and one id needs no ranking at all), and the
+    // timing gate here could not tell. Counted: 73 at every size.
+    expectIndependentOfGraphSize(resolvePerOp, "resolveDrop Map operations");
   }, 120_000);
 
   it("a cross-parent move re-indexes what travelled, not the document", () => {
@@ -1210,7 +1138,7 @@ describe("mutations", () => {
 
       perOp.set(
         fx.label,
-        measure("move (cross parent)", fx.label, fx.nodeCount, () => {
+        measureWork("move (cross parent)", fx.label, fx.nodeCount, () => {
           engine.applyCommand(fx.graph, command);
         }),
       );
@@ -1226,7 +1154,9 @@ describe("mutations", () => {
     // a magic constant nobody can source.
     expect(perMove).toBeLessThanOrEqual(CROSS_PARENT_MOVED_SUBTREE);
 
-    expectSubQuadratic(perOp, "cross-parent move");
+    // ~4 Map operations per node (522 / 4,208 / 41,066): copy-on-write of the
+    // maps a move changes, one of them per-node.
+    expectLinearWork(perOp, "cross-parent move");
   }, 120_000);
 
   /**
@@ -1287,11 +1217,11 @@ describe("mutations", () => {
         type: "remove-nodes",
         nodeIds: childIds.map((id) => parseNodeId(id)),
       };
-      // The op must actually succeed, or this times a rejection path.
+      // The op must actually succeed, or this counts a rejection path.
       expect(engine.applyCommand(graph, command).ok).toBe(true);
 
       ratioSamples.push(
-        measure(
+        measureWork(
           "multi-select delete",
           `flat${siblings}`,
           siblings + 1,
@@ -1306,7 +1236,8 @@ describe("mutations", () => {
     const large = ratioSamples[1];
     expect(small !== undefined && large !== undefined && small > 0).toBe(true);
     if (small === undefined || large === undefined || small <= 0) return;
-    expectSubQuadraticRatio(large / small, "multi-select delete");
+    // 36 Map operations per sibling, plus 35 (36,035 / 360,035).
+    expectLinearWorkRatio(large / small, "multi-select delete");
   }, 120_000);
 
   /**
@@ -1449,7 +1380,7 @@ describe("mutations", () => {
 
       perOp.set(
         fx.label,
-        measure("edit (one node)", fx.label, fx.nodeCount, () => {
+        measureWork("edit (one node)", fx.label, fx.nodeCount, () => {
           engine.applyCommand(fx.graph, command);
         }),
       );
@@ -1463,7 +1394,9 @@ describe("mutations", () => {
     // edit path started consulting nodes it did not change.
     expect(perEdit).toBeLessThanOrEqual(2);
 
-    expectSubQuadratic(perOp, "content edit");
+    // 4n + 31 (431 / 4,031 / 40,031): the node-type count above is the claim
+    // that stays flat; this is the copy-on-write around it.
+    expectLinearWork(perOp, "content edit");
   }, 120_000);
 
   /**
@@ -1605,8 +1538,8 @@ describe("mutations", () => {
 
 describe("undo and redo", () => {
   it("verification is O(patch) and replay re-indexes no more than the command did", () => {
-    const roundTripPerOp = new Map<string, number>();
-    const verifyPerOp = new Map<string, number>();
+    const roundTripWork = new Map<string, number>();
+    const verifyWork = new Map<string, number>();
     const reindexed = new Map<string, number>();
 
     for (const fx of wideSizes) {
@@ -1616,21 +1549,25 @@ describe("undo and redo", () => {
       expect(dispatched.ok).toBe(true);
       if (!dispatched.ok) return;
 
-      // Both directions must actually work before either is timed — an undo
-      // that rejects is fast and worthless as a measurement.
+      // Both directions must actually work before either is counted — an undo
+      // that rejects does no work and is worthless as a measurement.
       expect(store.undo().ok).toBe(true);
       expect(store.redo().ok).toBe(true);
 
       const inverse = engine.invertPatch(dispatched.value);
 
-      // `verifyPatchApplies` builds a LAZY children overlay: it copies only the
-      // arrays the patch names, never the graph. This is the assertion that
-      // pins that — if somebody replaces the overlay with a full copy, this
-      // ratio moves from ~1 to ~10 and the test says so.
+      // `verifyPatchApplies` reads the graph through OVERLAYS — the children
+      // arrays the patch names, the parents of the nodes it moves — and never
+      // copies it. Counted rather than timed, so the claim is exact: the same
+      // Map work at 100, 1,000 and 10,000 nodes. Its cycle check used to build
+      // the post-state as `new Map(graph.parentById)`, a full copy on every
+      // undo (230 / 2,030 / 20,030 operations, 2n + 30), and the wall-clock
+      // sub-quadratic gate that stood here passed it, because linear is
+      // sub-quadratic. Now 32 at every size.
       expect(engine.verifyPatchApplies(store.getGraph(), inverse).ok).toBe(true);
-      verifyPerOp.set(
+      verifyWork.set(
         fx.label,
-        measure("verifyPatchApplies (undo)", fx.label, fx.nodeCount, () => {
+        countMapWork(() => {
           engine.verifyPatchApplies(store.getGraph(), inverse);
         }),
       );
@@ -1654,14 +1591,18 @@ describe("undo and redo", () => {
       expect(counts.applyEdit).toBe(0);
 
       // The real store path, both directions, as one repeatable round trip:
-      // after undo+redo the graph and both stacks are back where they started.
-      roundTripPerOp.set(
-        fx.label,
-        measure("undo + redo (store)", fx.label, fx.nodeCount, () => {
-          store.undo();
-          store.redo();
-        }),
-      );
+      // after undo+redo the graph and both stacks are back where they started,
+      // which is why counting it twice gives the same number twice.
+      const once = countMapWork(() => {
+        store.undo();
+        store.redo();
+      });
+      const twice = countMapWork(() => {
+        store.undo();
+        store.redo();
+      });
+      expect(twice).toBe(once);
+      roundTripWork.set(fx.label, once);
 
       store.destroy();
     }
@@ -1676,8 +1617,14 @@ describe("undo and redo", () => {
     );
     expect(perUndo).toBeLessThanOrEqual(WIDE_FANOUT + 1);
 
-    expectSubQuadratic(roundTripPerOp, "undo + redo round trip");
-    expectSubQuadratic(verifyPerOp, "verifyPatchApplies");
+    expectIndependentOfGraphSize(verifyWork, "verifyPatchApplies Map operations");
+
+    // THE ROUND TRIP IS LINEAR, and that part is by design: `applyPatch` is
+    // copy-on-write, so each direction copies the graph's Maps once. Counted
+    // 544 / 4,316 / 42,032 at 100 / 1,000 / 10,000 nodes. This replaced a
+    // wall-clock ratio that failed an unrelated pull request at 49.4x against
+    // a 40x ceiling on unchanged engine code (see section 12).
+    expectLinearWork(roundTripWork, "undo + redo round trip");
   }, 120_000);
 });
 
@@ -1710,16 +1657,18 @@ describe("folds", () => {
 
       perOp.set(
         fx.label,
-        measure("fold cold (no cache)", fx.label, fx.nodeCount, () => {
+        measureWork("fold cold (no cache)", fx.label, fx.nodeCount, () => {
           computeFold(fx.graph, durationFold, fx.rootId);
         }),
       );
     }
 
-    expectSubQuadratic(perOp, "cold fold");
+    // ~5 Map operations per node visited (540 / 5,212 / 51,928).
+    expectLinearWork(perOp, "cold fold");
   }, 120_000);
 
   it("a warm fold is a single cache hit, at any size", () => {
+    const warmWork = new Map<string, number>();
     for (const fx of wideSizes) {
       // Sized to hold the whole graph. The DEFAULT limit is smaller than that
       // for a real document, and the next test measures what that costs — but
@@ -1747,7 +1696,7 @@ describe("folds", () => {
         ),
       ).toBe(0);
 
-      const coldNs = measure(
+      const coldWork = measureWork(
         "fold cold (fresh cache)",
         fx.label,
         fx.nodeCount,
@@ -1760,17 +1709,21 @@ describe("folds", () => {
           );
         },
       );
-      const warmNs = measure(
-        "fold warm (whole graph)",
+      warmWork.set(
         fx.label,
-        fx.nodeCount,
-        () => {
+        measureWork("fold warm (whole graph)", fx.label, fx.nodeCount, () => {
           computeFold(fx.graph, durationFold, fx.rootId, cache);
-        },
+        }),
       );
-
-      expect(coldNs / warmNs).toBeGreaterThan(WARM_FOLD_SPEEDUP_FLOOR);
+      // Cheaper than cold at every size, and not by a timed margin: cold does
+      // Map work per node (1,040 / 10,212 / 101,928), warm does a fixed amount.
+      expect(warmWork.get(fx.label)).toBeLessThan(coldWork);
     }
+
+    // THE CLAIM, counted. This was a timed cold/warm speed-up held above a
+    // floor of 20; the Map work says it exactly — 26 operations at every size,
+    // which is one lookup of the root's entry and nothing below it.
+    expectIndependentOfGraphSize(warmWork, "warm fold Map operations");
   }, 120_000);
 
   it("an incremental refold costs the ancestor chain, not the graph", () => {
@@ -1883,7 +1836,7 @@ describe("folds", () => {
     expect(evictedRefold).toBeLessThanOrEqual(fx.nodeCount);
     expect(evictedRefold).toBeGreaterThan(0);
 
-    measure("fold cold+refold (512 cache)", fx.label, fx.nodeCount, () => {
+    measureWork("fold cold+refold (512 cache)", fx.label, fx.nodeCount, () => {
       const scratch = createFoldCache(512);
       computeFold(fx.graph, durationFold, fx.rootId, scratch);
       computeFold(edited, durationFold, fx.rootId, scratch);
@@ -1906,7 +1859,7 @@ describe("depth", () => {
     expect(
       noteCount("deserialize", fx.label, fx.nodeCount, "parse", loadCounts.parse),
     ).toBe(fx.nodeCount);
-    measure("deserialize", fx.label, fx.nodeCount, () => {
+    measureWork("deserialize", fx.label, fx.nodeCount, () => {
       engine.deserialize(fx.doc);
     });
 
@@ -1925,7 +1878,7 @@ describe("depth", () => {
         foldCalls(foldCounts),
       ),
     ).toBe(fx.nodeCount);
-    measure("fold cold (no cache)", fx.label, fx.nodeCount, () => {
+    measureWork("fold cold (no cache)", fx.label, fx.nodeCount, () => {
       computeFold(fx.graph, durationFold, fx.rootId);
     });
 
@@ -1955,7 +1908,7 @@ describe("depth", () => {
         moveCounts.contentKey,
       ),
     ).toBeLessThanOrEqual(fx.nodeCount);
-    measure("move (deepest to root)", fx.label, fx.nodeCount, () => {
+    measureWork("move (deepest to root)", fx.label, fx.nodeCount, () => {
       engine.applyCommand(fx.graph, command);
     });
 
@@ -1963,7 +1916,7 @@ describe("depth", () => {
     expect(store.dispatch(command).ok).toBe(true);
     expect(store.undo().ok).toBe(true);
     expect(store.redo().ok).toBe(true);
-    measure("undo + redo (store)", fx.label, fx.nodeCount, () => {
+    measureWork("undo + redo (store)", fx.label, fx.nodeCount, () => {
       store.undo();
       store.redo();
     });
@@ -2045,10 +1998,10 @@ describe("depth", () => {
     expect(store.selection.get().length).toBe(fx.nodeCount);
     store.destroy();
 
-    measure("fold cold (no cache)", fx.label, fx.nodeCount, () => {
+    measureWork("fold cold (no cache)", fx.label, fx.nodeCount, () => {
       computeFold(fx.graph, durationFold, fx.rootId);
     });
-    measure("move (deepest to root)", fx.label, fx.nodeCount, () => {
+    measureWork("move (deepest to root)", fx.label, fx.nodeCount, () => {
       engine.applyCommand(fx.graph, command);
     });
   }, 180_000);
@@ -2058,15 +2011,17 @@ describe("depth", () => {
 // 12. Why there is no section 12
 // ---------------------------------------------------------------------------
 //
-// FOUR wall-clock cost gates were written for this round's findings and all
-// four were deleted. Recording that here so a fifth starts from the evidence
-// rather than from scratch.
+// FIVE wall-clock cost gates were written in this file and all five were
+// deleted. Recording that here so a sixth starts from the evidence rather than
+// from scratch.
 //
 // This section said THREE for two days, while the fourth sat 700 lines above it
 // in this same file, added in the same commit. So the first lesson is about the
 // record and not the gates: a warning does not inspect the code around it. When
 // this is next updated, GREP THE FILE for the shape before believing the count
-// — a ratio of two timings, a tuned ceiling, `measureLinearReferenceGrowth`.
+// — a ratio of two timings, a tuned ceiling, a linear reference re-timed
+// beside it. (As of the fifth there are none left: every scaling assertion in
+// this file now counts Map work, see `countMapWork`.)
 //
 //   UNDO OF A BULK INSERT (quadratic `indexOf` in the verify overlay). A
 //   2K-vs-K growth ratio separates the implementations 2.19 to 1.0 — but only
@@ -2098,6 +2053,19 @@ describe("depth", () => {
 //   defensible version of the idea — does not rescue it: the noise moves
 //   between the reference and the subject too.
 //
+//   UNDO + REDO ROUND TRIP, 1K vs 10K, against the same linear reference (a
+//   fifth, and it was in THIS file all along, as the grep above said it would
+//   be). Failed an unrelated media-monster pull request at 49.4x against a 40x
+//   ceiling on unchanged engine code, then passed on re-run. Worse than flaky:
+//   it had been passing a REAL regression. `verifyPatchApplies` copied the
+//   whole parent map on every undo, linear where the test's name said O(patch),
+//   and linear clears a sub-quadratic bar. Replaced by `countMapWork`, which
+//   caught the copy on its first run — and so were the seven other assertions
+//   that shared its helper (deserialize, reorder, resolveDrop, cross-parent
+//   move, multi-select delete, content edit, cold fold) and the timed cold/warm
+//   fold speed-up. Counting them found a second stale claim: `resolveDrop` was
+//   documented as walking the document and does 73 Map operations at any size.
+//
 // THE COMMON FAILURE is not noise, and widening thresholds is not the fix. Each
 // gate assumed two measurements were comparable when the work behind them was
 // not, and a shared CI runner exposes that where a quiet laptop hides it. The
@@ -2107,6 +2075,11 @@ describe("depth", () => {
 //   count — `countOnce`, `noteCount`, the `Counters` harness — which is exact
 //   and machine-independent. It costs an instrumentation hook in production
 //   code, which is a real decision, not a drive-by.
+//
+//   Not always: `countMapWork` counts the engine's Map operations by patching
+//   `Map.prototype` for the length of one call, with no hook at all. The
+//   engine's state IS Maps, so that is its work; a copy is counted too, because
+//   `new Map(existing)` goes through the patched `set` and iterator.
 //
 //   OR DESYNCHRONISE THE REDUNDANT STRUCTURES AND ASK WHICH ONE IS READ. Where
 //   a fast path exists BECAUSE a second structure mirrors a slow one, the mirror
