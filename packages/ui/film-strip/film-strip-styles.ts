@@ -751,4 +751,21 @@ export const PLAYBAR_CSS = `.pb{
     0 40px 90px -40px rgba(0,0,0,.9),
     0 8px 30px -18px rgba(0,0,0,.8);
 }
+
+/* ── MEDIA MONSTER (not in the gstudio copy) ─────────────────────────────
+   NO EDGE FADE. The reference masks the film out over its first and last
+   26px, which read as the footage fading away.
+
+   THE TIME CHIP FLOATS. It is portalled into the body and positioned fixed
+   over the playhead, so it can hang past the film's edge and sit above the
+   host's chrome (above the rail's z-50, below the skim card's z-60). The
+   component sets its \`left\`, \`top\` and \`visibility\`; it starts hidden so
+   it cannot flash in a corner before the first placement. The playing glow is
+   restated because it keyed on \`.is-playing\` on the bar, an ancestor the
+   chip no longer has. ─────────────────────────────────────────────────── */
+.pb .viewport{ -webkit-mask-image:none; mask-image:none; }
+.pb .ph-chip.ph-chip-floating{ position:fixed; z-index:55; visibility:hidden; }
+.pb .ph-chip.ph-chip-floating.is-playing{
+  box-shadow:0 2px 10px rgba(0,0,0,.55), 0 0 0 1px rgba(0,0,0,.25), 0 0 14px rgba(56, 189, 248,.45);
+}
 `;
