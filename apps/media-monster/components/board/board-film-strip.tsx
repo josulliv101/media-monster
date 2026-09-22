@@ -22,6 +22,9 @@ import { imageUrl, videoFrameUrl } from "@/lib/media/cloudinary";
  * media, or media Cloudinary cannot transform, falls back to one of the
  * reference design's gradients so the box is never blank.
  *
+ * ONLY ACTIVE CLIPS. A clip flagged inactive on the board (an alternate take,
+ * a plate kept for later) is left out, which is the whole point of the flag.
+ *
  * AN UNREAD COLLECTION CONTRIBUTES NOTHING. Its clips are not in the graph, and
  * inventing a box for a stored summary would draw footage nobody has read. The
  * strip is the cut as far as it is known — the board's rollup is what says how
@@ -88,6 +91,9 @@ function shotsFromGraph(graph: ReturnType<typeof useGraph>, size: FilmStripSize)
   for (const id of documentOrder(graph)) {
     const node = getNode(graph, id);
     if (node === undefined || node.sealed || node.kind !== "clip") continue;
+    // INACTIVE CLIPS ARE NOT IN THE CUT. They stay on the board; the strip is
+    // what plays.
+    if (!node.data.active) continue;
     // A clip directly under a root is not in a section; one inside a
     // collection is labelled with it on the ruler.
     const parentId = getParent(graph, id);

@@ -83,8 +83,32 @@ const secondsFold = foldMonoid<NodeTypes, CollectionSummary, number>({
   },
 });
 
+/**
+ * THE CUT'S RUNNING TIME: only clips flagged active, which is exactly what the
+ * film strip plays. `seconds` stays the collection's CONTENT (everything on the
+ * board, alternates included); this is the reel.
+ *
+ * An unread collection's stored summary does not say which of its clips are
+ * active, so its placeholder is the whole summary. The fold reports that at
+ * certainty "estimated" already, which is the honest reading: the running time
+ * is not known until the collection is read.
+ */
+const activeSecondsFold = foldMonoid<NodeTypes, CollectionSummary, number>({
+  key: "activeSeconds",
+  empty: 0,
+  leaf(node) {
+    return node.kind === "clip" && node.data.active ? node.data.seconds : 0;
+  },
+  concat(a, b) {
+    return a + b;
+  },
+  placeholder(node) {
+    return node.summary === null ? undefined : node.summary.seconds;
+  },
+});
+
 export const engine = createEngine({
   types: nodeTypes,
   summary,
-  folds: { seconds: secondsFold },
+  folds: { seconds: secondsFold, activeSeconds: activeSecondsFold },
 });

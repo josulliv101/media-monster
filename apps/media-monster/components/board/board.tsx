@@ -157,26 +157,86 @@ function ClipPicture({ media, seconds }: Readonly<{ media: ClipMedia | null; sec
 function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
   const selected = useIsSelected(id);
   const selection = useSelectionActions();
+  const dispatch = useDispatch();
+
+  // IN THE CUT OR NOT. A document edit, so it is undoable like any other and
+  // the strip follows it through the graph rather than through a side channel.
+  const toggleActive = () => {
+    dispatch({
+      type: "edit-nodes",
+      edits: [{ nodeId: id, kind: "clip", edit: { active: !data.active } }],
+    });
+  };
+
+  // DIMMED WHEN INACTIVE, UNTIL YOU REACH FOR IT: hovering the card or focusing
+  // anything in it lifts the dim, so an inactive clip reads normally while you
+  // look at it or flip it back on.
+  const dimmed = data.active
+    ? null
+    : "opacity-35 grayscale group-hover/clip:opacity-100 group-hover/clip:grayscale-0 group-focus-within/clip:opacity-100 group-focus-within/clip:grayscale-0";
+
   return (
-    <button
-      type="button"
-      aria-pressed={selected}
-      onClick={() => selection.toggle(id)}
+    // THE CARD IS A BOX HOLDING TWO CONTROLS, not one button: the picture and
+    // title select the clip, the switch below flags it. A button cannot hold a
+    // button, so the border and selected state live on this box instead.
+    <div
       className={cn(
-        "flex w-full flex-col overflow-hidden rounded-lg border text-left transition-colors",
+        "group/clip flex flex-col overflow-hidden rounded-lg border transition-colors",
         selected
           ? "border-sky-400/60 bg-sky-400/10 text-zinc-50"
           : "border-zinc-800 bg-zinc-900/40 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-900",
       )}
     >
-      <ClipPicture media={data.media} seconds={data.seconds} />
-      <span className="flex items-baseline justify-between gap-3 px-3 py-2">
-        <span className="min-w-0 truncate text-sm">{data.title}</span>
-        <span className="shrink-0 text-xs tabular-nums text-zinc-500">
-          {formatSeconds(data.seconds)}
+      <button
+        type="button"
+        aria-pressed={selected}
+        onClick={() => selection.toggle(id)}
+        className="flex w-full flex-col text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-500"
+      >
+        <span className={cn("block transition-[opacity,filter] duration-150", dimmed)}>
+          <ClipPicture media={data.media} seconds={data.seconds} />
         </span>
-      </span>
-    </button>
+        <span
+          className={cn(
+            "flex items-baseline justify-between gap-3 px-3 pt-2 transition-opacity duration-150",
+            dimmed,
+          )}
+        >
+          <span className="min-w-0 truncate text-sm">{data.title}</span>
+          <span className="shrink-0 text-xs tabular-nums text-zinc-500">
+            {formatSeconds(data.seconds)}
+          </span>
+        </span>
+      </button>
+      <div className="flex items-center px-3 pt-1.5 pb-2">
+        <button
+          type="button"
+          role="switch"
+          aria-checked={data.active}
+          title={data.active ? "In the film strip" : "Not in the film strip"}
+          data-clip-active-toggle
+          onClick={toggleActive}
+          className="flex items-center gap-2 rounded-md text-xs text-zinc-400 transition-colors hover:text-zinc-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500"
+        >
+          {/* The track and its knob; the knob slides right when active. */}
+          <span
+            aria-hidden="true"
+            className={cn(
+              "relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-150",
+              data.active ? "bg-sky-500" : "bg-zinc-700",
+            )}
+          >
+            <span
+              className={cn(
+                "absolute left-0.5 size-3 rounded-full bg-white shadow transition-transform duration-150 motion-reduce:transition-none",
+                data.active ? "translate-x-3" : "translate-x-0",
+              )}
+            />
+          </span>
+          Active
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -237,7 +297,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
       type: "insert-nodes",
       toParentId: id,
       toIndex: children.length,
-      seeds: [{ kind: "clip", data: { title: "Untitled clip", seconds: 3, media: null } }],
+      seeds: [{ kind: "clip", data: { title: "Untitled clip", seconds: 3, media: null, active: true } }],
     });
     // EVERY FAILURE IS A TYPED RESULT, never a throw — so a refusal has to be
     // read to be noticed. Inserting into an unread collection is refused with
@@ -345,29 +405,37 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
 }
 
 /**
- * THE BOARD'S VIEWS, REGISTERED ONCE PER PAGE LOAD.
+ * THE BOARD'S VIEWS, REGISTERED ONCE PER REGISTRY.
  *
- * Hot reload re-runs this module but not `bindings.ts`, whose registry already
- * holds the views from the first run, so registering unconditionally reported
- * "a view for kind ... is already registered" on every edit to this file. A
- * flag on `globalThis` survives the re-run and a full reload clears it.
+ * Hot reload re-runs this module without re-running `bindings.ts`, whose
+ * registry already holds the views, so registering unconditionally reported
+ * "a view for kind ... is already registered" on every edit to this file.
  *
- * An edit still shows up without a reload: Fast Refresh swaps a component's
- * implementation by its identity in the refresh runtime, not through whatever
- * reference the registry kept, so the first-run `ClipCard` renders the edited
- * code. Measured by editing the collection card's text with the page open.
+ * KEYED ON THE REGISTRY, not on the page. The first version of this guard was
+ * one page-wide flag, and an edit to `engine.ts` broke it: that re-runs
+ * `bindings.ts`, which builds a NEW, empty registry, and the flag then kept
+ * this module from filling it — "no view registered for kind collection" and a
+ * blank board until a full reload. `defineNodeView` is created with its
+ * registry, so a new registry means a new function, and a WeakSet of the
+ * functions already used answers "has THIS registry got the views?".
+ *
+ * An edit to this file still shows without a reload: Fast Refresh swaps a
+ * component's implementation by its identity in the refresh runtime, not
+ * through whatever reference the registry kept.
  */
-const VIEWS_REGISTERED = Symbol.for("media-monster:board-views-registered");
-const registry = globalThis as { [VIEWS_REGISTERED]?: true };
-if (registry[VIEWS_REGISTERED] === undefined) {
-  registry[VIEWS_REGISTERED] = true;
+const REGISTERED_WITH = Symbol.for("media-monster:board-views-registered-with");
+const holder = globalThis as { [REGISTERED_WITH]?: WeakSet<object> };
+const registeredWith = (holder[REGISTERED_WITH] ??= new WeakSet<object>());
+if (!registeredWith.has(defineNodeView)) {
+  registeredWith.add(defineNodeView);
   defineNodeView("clip", ClipCard);
   defineNodeView("collection", CollectionCard);
 }
 
 function Toolbar({ rootId }: Readonly<{ rootId: ReturnType<typeof parseNodeId> }>) {
   const { canUndo, canRedo, undo, redo } = useHistory();
-  const total = useFold("seconds", rootId);
+  // THE REEL IS WHAT PLAYS: active clips only, so this agrees with the strip.
+  const total = useFold("activeSeconds", rootId);
   const button =
     "flex items-center gap-1.5 rounded-md border border-zinc-800 px-2.5 py-1.5 text-xs text-zinc-300 transition-colors hover:border-zinc-700 hover:text-zinc-50 disabled:cursor-not-allowed disabled:border-zinc-900 disabled:text-zinc-700";
   return (
@@ -403,10 +471,19 @@ export function Board({
   // at module scope so React Strict Mode's double render does not build two, and
   // so a future document id can key it. `loadFixtureGraph` throws on a fixture
   // that does not parse, which is what should happen — it ships with the app.
-  const [{ store, sealed }] = useState(() => {
+  const buildStore = () => {
     const { graph, report } = loadFixtureGraph();
-    return { store: engine.createStore(graph), sealed: report.sealed };
-  });
+    return { store: engine.createStore(graph), sealed: report.sealed, builtBy: engine };
+  };
+  const [built, setBuilt] = useState(buildStore);
+  // A NEW ENGINE MEANS A NEW STORE. Only hot reload makes one: an edit to
+  // `engine.ts` (or the node types) re-runs it and the bindings, while Fast
+  // Refresh keeps this state, so the board held a store from the old engine
+  // and the bindings refused it ("built by a different engine"). Rebuilt
+  // during render, React's pattern for state that follows a changed input.
+  // The fixture reloads, so unsaved edits go with it, as they would on reload.
+  if (built.builtBy !== engine) setBuilt(buildStore());
+  const { store, sealed } = built;
   const rootId = parseNodeId(FIXTURE_ROOT_ID);
 
   return (
