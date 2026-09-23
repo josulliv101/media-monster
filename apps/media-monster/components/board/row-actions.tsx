@@ -16,7 +16,8 @@ import { cn } from "@/lib/utils";
  * `checked` makes it a switch (drawn with `SwitchTrack`, announced as one);
  * without it, it is a plain button. Choosing a switch leaves the menu or tray
  * open so the switch is seen to move; choosing a plain action is expected to
- * go somewhere, and the caller closes whatever it was in.
+ * go somewhere, and the menu or tray closes behind it — unless it says
+ * `keepOpen`, for an action that is naturally repeated (move up, move up…).
  */
 export type RowAction = Readonly<{
   id: string;
@@ -28,6 +29,8 @@ export type RowAction = Readonly<{
   disabled?: boolean;
   /** A tooltip, for the reason something is disabled. */
   title?: string;
+  /** Stay open after choosing it, as a switch does, so it can be chosen again. */
+  keepOpen?: boolean;
   onSelect: () => void;
 }>;
 
@@ -54,8 +57,12 @@ export function SwitchTrack({ on }: Readonly<{ on: boolean }>) {
   );
 }
 
-/** The actions as items of the ⋮ menu. */
-export function RowMenuItems({ actions }: Readonly<{ actions: readonly RowAction[] }>) {
+/** The actions as items of the ⋮ menu. `onChosen` runs after an action's own
+ *  `onSelect`, so the menu can close or stay open behind it. */
+export function RowMenuItems({
+  actions,
+  onChosen,
+}: Readonly<{ actions: readonly RowAction[]; onChosen: (action: RowAction) => void }>) {
   return actions.map((action) => (
     <button
       key={action.id}
@@ -65,7 +72,10 @@ export function RowMenuItems({ actions }: Readonly<{ actions: readonly RowAction
       disabled={action.disabled}
       title={action.title}
       data-row-action={action.id}
-      onClick={action.onSelect}
+      onClick={() => {
+        action.onSelect();
+        onChosen(action);
+      }}
       className="flex w-full items-center justify-between gap-6 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-zinc-800 focus-visible:bg-zinc-800 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
     >
       <span className="flex min-w-0 items-center gap-2.5">
