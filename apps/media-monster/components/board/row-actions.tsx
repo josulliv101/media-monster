@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 /**
  * WHAT CAN BE DONE TO A ROW, as data: ONE list, drawn two ways.
  *
- * On a wide screen the actions live in the row's ⋮ menu (`row-menu.tsx`); on a
+ * On a wide screen the actions live in the row's ⋮ menu (`action-menu.tsx`); on a
  * phone they are hidden, and a left swipe on the row shows them in a tray
  * behind it (`swipe-row.tsx`). Both read the same list, so an action added
  * here turns up in both, and the two cannot drift into offering different
