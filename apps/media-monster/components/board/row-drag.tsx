@@ -1,0 +1,318 @@
+"use client";
+
+import { getChildren, getParent, type NodeId } from "@josulliv101/nested-collections";
+import { createContext, use, useRef, useState, type ReactNode } from "react";
+import { GripVertical } from "lucide-react";
+
+import { useStore } from "@/lib/engine/bindings";
+
+/**
+ * DRAGGING A ROW to anywhere in the tree: between two rows at any depth, into
+ * any row (a child row included, making the dragged row its child), or out and
+ * up past the end of the row it is in.
+ *
+ * PICKED UP BY THE GRIP at the far right of the row, and nowhere else: the bar
+ * already means open-or-close, and on a phone a sideways drag on the bar is the
+ * swipe. The grip takes the whole gesture (`touch-action: none`).
+ *
+ * WHERE IT WILL LAND IS SHOWN BY THE ROWS PARTING: a dashed placeholder opens
+ * at that spot, at that depth, and the rows below slide down to make room
+ * (`RowDropPlaceholder`, drawn by the collection that will receive it). Into a
+ * closed row, where there is no list to open a gap in, that row is ringed
+ * instead. The row being dragged stays where it is, faded, until it lands.
+ *
+ * WHERE THE POINTER IS decides the target, read off the row under it:
+ *   - the top 30% of a row's bar: before that row, among its siblings;
+ *   - the bottom 30% of a CLOSED row's bar: after it;
+ *   - the rest of a bar (all of an open row's lower part): INTO that row, at
+ *     the end of what it holds;
+ *   - a row's footer (its "Add clip" line, below everything it holds): after
+ *     that row, one level up. This is how a row is moved out and higher: past
+ *     the end of the row it is in.
+ * Anywhere else inside the board keeps the last target, so the gaps between
+ * rows, the cards and the placeholder itself (which the pointer sits on once
+ * the rows have parted) do not flicker it away. Outside the board there is no
+ * target, and letting go there puts nothing anywhere.
+ *
+ * THE ENGINE DECIDES WHAT IS LEGAL. Every candidate goes through
+ * `store.resolveDrop` — the only place a post-removal index is computed — which
+ * refuses a row dropped inside its own branch, into a collection not read yet,
+ * or anywhere else the graph cannot take it. A refused spot shows no gap and a
+ * not-allowed cursor; a spot that would not move it (next to itself) shows
+ * nothing either. Letting go dispatches exactly the command it returned, so the
+ * move is one undoable step.
+ */
+
+export type RowDropTarget = Readonly<{
+  parentId: NodeId;
+  /** Among the parent's children as they stand NOW, the dragged row included. */
+  index: number;
+  kind: "between" | "into";
+}>;
+
+type RowDragState = Readonly<{
+  dragId: NodeId | null;
+  dragName: string;
+  target: RowDropTarget | null;
+  /** Where the pointer was when the drag began, for the label's first frame;
+   *  after that the label is moved by hand, not by rendering. */
+  startAt: Readonly<{ x: number; y: number }>;
+}>;
+
+type RowDragValue = Readonly<{
+  state: RowDragState;
+  start: (id: NodeId, name: string, event: React.PointerEvent<HTMLElement>) => void;
+}>;
+
+const IDLE: RowDragState = { dragId: null, dragName: "", target: null, startAt: { x: 0, y: 0 } };
+
+const RowDragContext = createContext<RowDragValue>({
+  state: IDLE,
+  start: () => undefined,
+});
+
+export function useRowDrag(): RowDragValue {
+  return use(RowDragContext);
+}
+
+/** How far the pointer moves before a press on the grip becomes a drag. */
+const START_PX = 4;
+/** Within this far of the top of the window, or of the film strip, the page scrolls. */
+const EDGE_PX = 72;
+const MAX_SCROLL_PX_PER_FRAME = 18;
+
+type Candidate = Readonly<{ parentId: NodeId; index: number; kind: "between" | "into" }>;
+
+function sameTarget(a: RowDropTarget | null, b: RowDropTarget | null): boolean {
+  return (
+    a === b ||
+    (a !== null &&
+      b !== null &&
+      a.parentId === b.parentId &&
+      a.index === b.index &&
+      a.kind === b.kind)
+  );
+}
+
+export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>) {
+  const store = useStore();
+  const [state, setState] = useState<RowDragState>(IDLE);
+  const [refused, setRefused] = useState(false);
+  const stateRef = useRef<RowDragState>(IDLE);
+  const labelRef = useRef<HTMLDivElement>(null);
+
+  const publish = (next: RowDragState) => {
+    stateRef.current = next;
+    setState(next);
+  };
+
+  // THE ROW UNDER THE POINTER, as a candidate spot — before it, after it, or
+  // into it — or "keep" when the pointer is in the board but not on a row, or
+  // null when it has left the board.
+  const candidateAt = (x: number, y: number): Candidate | "keep" | null => {
+    const hit = document.elementFromPoint(x, y);
+    if (hit === null || hit.closest("[data-board-tree]") === null) return null;
+    if (hit.closest("[data-row-placeholder]") !== null) return "keep";
+    const graph = store.getGraph();
+    const siblingSpot = (id: NodeId, after: boolean): Candidate | "keep" => {
+      const parentId = getParent(graph, id);
+      if (parentId === null) return "keep";
+      const index = getChildren(graph, parentId).indexOf(id);
+      return { parentId, index: index + (after ? 1 : 0), kind: "between" };
+    };
+    const intoSpot = (id: NodeId): Candidate => ({
+      parentId: id,
+      index: getChildren(graph, id).length,
+      kind: "into",
+    });
+
+    const header = hit.closest<HTMLElement>("[data-row-header]");
+    if (header !== null) {
+      const id = header.dataset.rowHeader as NodeId;
+      const isRoot = header.dataset.rowRoot === "true";
+      const open = header.dataset.rowOpen === "true";
+      const box = header.getBoundingClientRect();
+      const at = (y - box.top) / Math.max(1, box.height);
+      // The row the board is showing has no visible parent to sit beside.
+      if (!isRoot && at < 0.3) return siblingSpot(id, false);
+      if (!isRoot && !open && at > 0.7) return siblingSpot(id, true);
+      return intoSpot(id);
+    }
+    const footer = hit.closest<HTMLElement>("[data-row-footer]");
+    if (footer !== null) {
+      const id = footer.dataset.rowFooter as NodeId;
+      // Past the end of the board's own top: the end of what it holds.
+      return footer.dataset.rowRoot === "true" ? intoSpot(id) : siblingSpot(id, true);
+    }
+    return "keep";
+  };
+
+  // THE ENGINE'S VERDICT on a candidate: a target, "stay" (it would not move),
+  // or "refused".
+  const judge = (dragId: NodeId, candidate: Candidate): RowDropTarget | "stay" | "refused" => {
+    const resolved = store.resolveDrop({
+      type: "move",
+      nodeIds: [dragId],
+      toParentId: candidate.parentId,
+      toIndexBefore: candidate.index,
+    });
+    if (resolved.ok) return candidate;
+    return resolved.error.code === "empty-command" ? "stay" : "refused";
+  };
+
+  const start = (id: NodeId, name: string, event: React.PointerEvent<HTMLElement>) => {
+    if (!event.isPrimary || event.button !== 0 || stateRef.current.dragId !== null) return;
+    // The grip's own gesture: not a swipe of the row, not a text selection.
+    event.stopPropagation();
+    event.preventDefault();
+    const pointerId = event.pointerId;
+    const startX = event.clientX;
+    const startY = event.clientY;
+    let dragging = false;
+    let lastX = startX;
+    let lastY = startY;
+    let frame = 0;
+    // ARMED ONLY ONCE THE POINTER HAS BEEN CLEAR OF BOTH EDGES. A row sitting
+    // just above the film strip starts its drag inside the bottom edge, and
+    // scrolling at once moved the board under a pointer that had not gone
+    // anywhere: measured, a drop aimed at "Shots, every take" landed in the
+    // row that had scrolled under it instead.
+    let scrollArmed = false;
+
+    const place = (x: number, y: number) => {
+      const label = labelRef.current;
+      if (label !== null) label.style.transform = `translate(${x + 14}px, ${y + 10}px)`;
+    };
+
+    const retarget = () => {
+      const candidate = candidateAt(lastX, lastY);
+      if (candidate === "keep") return;
+      let next: RowDropTarget | null = null;
+      let isRefused = false;
+      if (candidate !== null) {
+        const verdict = judge(id, candidate);
+        if (verdict === "refused") isRefused = true;
+        else if (verdict !== "stay") next = verdict;
+      }
+      setRefused(isRefused);
+      document.documentElement.classList.toggle("row-drag-refused", isRefused);
+      if (!sameTarget(next, stateRef.current.target)) {
+        publish({ ...stateRef.current, target: next });
+      }
+    };
+
+    // THE PAGE SCROLLS near the top of the window or the film strip, so a row
+    // can be taken further than one screen — once armed (above).
+    const scroll = () => {
+      frame = requestAnimationFrame(scroll);
+      const strip = document.querySelector("[data-board-strip]")?.getBoundingClientRect();
+      const bottom = strip === undefined ? window.innerHeight : strip.top;
+      const inTop = lastY < EDGE_PX;
+      const inBottom = lastY > bottom - EDGE_PX;
+      if (!scrollArmed) {
+        if (!inTop && !inBottom) scrollArmed = true;
+        return;
+      }
+      let step = 0;
+      if (inTop) step = -((EDGE_PX - lastY) / EDGE_PX) * MAX_SCROLL_PX_PER_FRAME;
+      else if (inBottom) {
+        step = (Math.min(EDGE_PX, lastY - (bottom - EDGE_PX)) / EDGE_PX) * MAX_SCROLL_PX_PER_FRAME;
+      }
+      if (step !== 0) {
+        const before = window.scrollY;
+        window.scrollBy(0, step);
+        if (window.scrollY !== before) retarget();
+      }
+    };
+
+    const finish = (commit: boolean) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onCancel);
+      window.removeEventListener("keydown", onKey, true);
+      cancelAnimationFrame(frame);
+      document.documentElement.classList.remove("row-dragging", "row-drag-refused");
+      const target = stateRef.current.target;
+      if (commit && dragging && target !== null) {
+        const resolved = store.resolveDrop({
+          type: "move",
+          nodeIds: [id],
+          toParentId: target.parentId,
+          toIndexBefore: target.index,
+        });
+        if (resolved.ok) store.dispatch(resolved.value);
+      }
+      setRefused(false);
+      publish(IDLE);
+    };
+
+    const onMove = (move: PointerEvent) => {
+      if (move.pointerId !== pointerId) return;
+      lastX = move.clientX;
+      lastY = move.clientY;
+      if (!dragging) {
+        if (Math.hypot(lastX - startX, lastY - startY) < START_PX) return;
+        dragging = true;
+        document.documentElement.classList.add("row-dragging");
+        publish({ dragId: id, dragName: name, target: null, startAt: { x: lastX, y: lastY } });
+        frame = requestAnimationFrame(scroll);
+      }
+      place(lastX, lastY);
+      retarget();
+    };
+    const onUp = (up: PointerEvent) => {
+      if (up.pointerId === pointerId) finish(true);
+    };
+    const onCancel = (cancel: PointerEvent) => {
+      if (cancel.pointerId === pointerId) finish(false);
+    };
+    // ESCAPE PUTS IT BACK, and is only that: nothing else hears it.
+    const onKey = (key: KeyboardEvent) => {
+      if (key.key !== "Escape") return;
+      key.preventDefault();
+      key.stopPropagation();
+      finish(false);
+    };
+
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onCancel);
+    window.addEventListener("keydown", onKey, true);
+  };
+
+  return (
+    <RowDragContext value={{ state, start }}>
+      {children}
+      {state.dragId === null ? null : (
+        <div
+          ref={labelRef}
+          aria-hidden="true"
+          data-row-drag-label
+          style={{ transform: `translate(${state.startAt.x + 14}px, ${state.startAt.y + 10}px)` }}
+          className="pointer-events-none fixed top-0 left-0 z-50 flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900/95 px-3 py-1.5 text-sm font-semibold text-zinc-100 shadow-xl shadow-black/50"
+        >
+          <GripVertical className="size-3.5 text-zinc-500" />
+          {state.dragName}
+          {refused ? <span className="ml-1 text-xs font-normal text-red-400">Can’t go here</span> : null}
+        </div>
+      )}
+    </RowDragContext>
+  );
+}
+
+/**
+ * THE GAP THE ROWS PART AROUND: where the dragged row will land, at the depth
+ * it will land. Drawn by the collection that will receive it, among its
+ * children, so everything after it moves down to make room.
+ */
+export function RowDropPlaceholder({ name }: Readonly<{ name: string }>) {
+  return (
+    <div
+      data-row-placeholder
+      className="row-drop-placeholder col-span-full flex h-12 items-center rounded-xl border-2 border-dashed border-sky-400/60 bg-sky-400/10 px-4 text-sm text-sky-300"
+    >
+      <span className="truncate">{name} lands here</span>
+    </div>
+  );
+}
+

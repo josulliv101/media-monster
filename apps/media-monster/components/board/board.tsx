@@ -1,6 +1,15 @@
 "use client";
 
-import { createContext, use, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
+import {
+  Fragment,
+  createContext,
+  use,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   documentOrder,
   getNode,
@@ -38,6 +47,7 @@ import { BoardFilmStrip } from "./board-film-strip";
 import { RowMenu } from "./row-menu";
 import type { RowAction } from "./row-actions";
 import { SwipeGroup, SwipeRow } from "./swipe-row";
+import { RowDragProvider, RowDropPlaceholder, useRowDrag } from "./row-drag";
 import {
   BoardPreview,
   cardPicture,
@@ -442,6 +452,19 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   const parentId = getParent(graph, id);
   const isTopLevel = showingRealRoot && parentId !== null && graph.rootIds.includes(parentId);
   const [collapsed, setCollapsed] = useState(!isRoot);
+
+  // A ROW BEING DRAGGED (see `row-drag.tsx`). This card draws its part of it:
+  // faded if it is the one being dragged, ringed if it is a CLOSED row about to
+  // take the drop, and the parted-rows placeholder among its children if it is
+  // the open row the drop will land in.
+  const rowDrag = useRowDrag();
+  const dropTarget = rowDrag.state.target;
+  const beingDragged = rowDrag.state.dragId === id;
+  const intoWhileClosed =
+    dropTarget !== null && dropTarget.kind === "into" && dropTarget.parentId === id && collapsed;
+  const placeholderAt =
+    dropTarget !== null && dropTarget.parentId === id && !intoWhileClosed ? dropTarget.index : null;
+  const placeholder = <RowDropPlaceholder name={rowDrag.state.dragName} />;
   const bodyId = useId();
 
   // AN UNREAD COLLECTION IS NOT AN EMPTY ONE, and this is the only place the app
@@ -468,6 +491,14 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
     return child === undefined || child.sealed || child.kind !== "collection";
   });
   const collectionIds = children.filter((childId) => !clipIds.includes(childId));
+  // In the row layout the rows are stacked apart from the clips, so the
+  // placeholder goes before the first ROW at or after its index.
+  const firstCollectionAtOrAfter =
+    placeholderAt === null
+      ? null
+      : (collectionIds
+          .map((childId) => children.indexOf(childId))
+          .find((index) => index >= placeholderAt) ?? null);
   const summarized = total?.certainty === "estimated";
 
   // OPENING READS IT. `store.load` is IO landing: no patch, no history entry,
@@ -529,7 +560,11 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
       ) : loadState === "missing" ? (
         <p className="px-1 py-2 text-xs text-zinc-500">Gone from storage.</p>
       ) : children.length === 0 ? (
-        <p className="px-1 py-2 text-xs text-zinc-600">Empty.</p>
+        placeholderAt === null ? (
+          <p className="px-1 py-2 text-xs text-zinc-600">Empty.</p>
+        ) : (
+          placeholder
+        )
       ) : layout === "row" ? (
         // ONE ROW THAT RUNS OFF THE EDGE, scrolled sideways, the way the
         // film strip reads the reel. A collection's height then stops
@@ -554,18 +589,32 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
             </div>
           )}
           {collectionIds.map((childId) => (
-            <NodeSlot key={childId} id={childId} />
+            <Fragment key={childId}>
+              {placeholderAt !== null && children.indexOf(childId) === firstCollectionAtOrAfter
+                ? placeholder
+                : null}
+              <NodeSlot id={childId} />
+            </Fragment>
           ))}
+          {placeholderAt !== null && firstCollectionAtOrAfter === null ? placeholder : null}
         </div>
       ) : (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-2 md:gap-3">
-          {children.map((childId) => (
-            <NodeSlot key={childId} id={childId} />
+          {children.map((childId, index) => (
+            <Fragment key={childId}>
+              {placeholderAt === index ? placeholder : null}
+              <NodeSlot id={childId} />
+            </Fragment>
           ))}
+          {placeholderAt === children.length ? placeholder : null}
         </div>
       )}
 
-      <div className="mt-2 flex items-center gap-3">
+      <div
+        data-row-footer={id}
+        data-row-root={isRoot}
+        className="mt-2 flex items-center gap-3"
+      >
         <button
           type="button"
           onClick={addClip}
@@ -607,8 +656,9 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
     <section
       data-branch-in-cut={on}
       className={cn(
-        "col-span-full border border-zinc-800 bg-zinc-950/60 p-2 md:p-3",
+        "col-span-full border border-zinc-800 bg-zinc-950/60 p-2 transition-opacity md:p-3",
         isRoot || isTopLevel ? "rounded-xl" : "rounded-l-xl border-r-0 pr-0 md:pr-0",
+        beingDragged && "opacity-40",
       )}
     >
       {/* THE WHOLE BAR TOGGLES: icon, name, duration, triangle and the space
@@ -630,8 +680,12 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
             the bar button did. The icons take a brighter tint of their own on
             top, so the one under the pointer still reads as its own target. */}
         <header
+          data-row-header={id}
+          data-row-open={!collapsed}
+          data-row-root={isRoot}
           className={cn(
             "group/row flex items-stretch gap-1 rounded-lg transition-colors hover:bg-zinc-800/60",
+            intoWhileClosed && "bg-sky-400/10 ring-2 ring-sky-400 ring-inset",
             "has-[[data-collection-toggle]:focus-visible]:bg-zinc-800/60 has-[[data-collection-toggle]:focus-visible]:outline-2 has-[[data-collection-toggle]:focus-visible]:-outline-offset-2 has-[[data-collection-toggle]:focus-visible]:outline-sky-500",
             "has-[[data-row-menu-button][aria-expanded=true]]:bg-zinc-800/60",
           )}
@@ -720,19 +774,29 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
           )}
           {/* THE ROW'S MENU (see `row-menu.tsx`). Its items are `menuActions`. */}
           <RowMenu label={data.name} actions={menuActions} />
+          {intoWhileClosed ? (
+            <span className="shrink-0 self-center rounded-full bg-sky-400/15 px-2 py-0.5 text-xs text-sky-300">
+              Move into
+            </span>
+          ) : null}
           {/* THE DRAG GRIP, last in the row so every grip sits against its
-              box's right edge. DRAWN ONLY FOR NOW: rows are to be dragged to a
-              new place among their siblings, or deeper or higher in the tree,
-              and this is where that will be picked up. Until it does something
-              it is decorative — hidden from assistive tech, no grab cursor,
-              nothing to focus — so it promises nothing it cannot do. */}
-          <span
-            aria-hidden="true"
-            data-row-drag-handle
-            className="flex shrink-0 items-center self-stretch px-1 text-zinc-600"
-          >
-            <GripVertical className="size-4" />
-          </span>
+              box's right edge. Press and drag it to move the row anywhere in
+              the tree (`row-drag.tsx`). Not on the row the board is showing:
+              nothing around it is on the page to move it next to.
+              Pointer-only for now, so it stays out of the accessibility tree
+              rather than announce a control a keyboard cannot use. */}
+          {isRoot ? null : (
+            <span
+              aria-hidden="true"
+              data-row-drag-handle
+              title="Drag to move"
+              style={{ touchAction: "none" }}
+              onPointerDown={(event) => rowDrag.start(id, data.name, event)}
+              className="flex shrink-0 cursor-grab items-center self-stretch rounded-lg px-1 text-zinc-600 transition-colors hover:bg-zinc-700/60 hover:text-zinc-200"
+            >
+              <GripVertical className="size-4" />
+            </span>
+          )}
         </header>
       </SwipeRow>
 
@@ -1181,20 +1245,22 @@ function BoardBody({
           treeFaded && "opacity-15",
         )}
       >
-        <BoardFocusContext value={{ shownRootId, focus }}>
-          <BoardLayoutContext value={boardLayout}>
-            <BoardPreviewContext value={openPreview}>
-              {/* KEYED on the root it shows, so going somewhere is a fresh view:
-                  the new top opens and everything inside it starts closed, rather
-                  than inheriting whatever state that card had deeper in the tree. */}
-              <BranchContext value={rootBranch}>
-                <SwipeGroup>
-                  <NodeSlot key={shownRootId} id={shownRootId} />
-                </SwipeGroup>
-              </BranchContext>
-            </BoardPreviewContext>
-          </BoardLayoutContext>
-        </BoardFocusContext>
+        <RowDragProvider>
+          <BoardFocusContext value={{ shownRootId, focus }}>
+            <BoardLayoutContext value={boardLayout}>
+              <BoardPreviewContext value={openPreview}>
+                {/* KEYED on the root it shows, so going somewhere is a fresh view:
+                    the new top opens and everything inside it starts closed, rather
+                    than inheriting whatever state that card had deeper in the tree. */}
+                <BranchContext value={rootBranch}>
+                  <SwipeGroup>
+                    <NodeSlot key={shownRootId} id={shownRootId} />
+                  </SwipeGroup>
+                </BranchContext>
+              </BoardPreviewContext>
+            </BoardLayoutContext>
+          </BoardFocusContext>
+        </RowDragProvider>
       </div>
       {preview === null || previewedId === null ? null : (
         <BoardPreview
@@ -1222,7 +1288,7 @@ function BoardBody({
           `sticky` does the pinning while the page scrolls. The page and `main`
           above are flex columns for this; see `app/page.tsx`. */}
       <div aria-hidden="true" className="min-h-6 flex-1" />
-      <div ref={stripRef} className="sticky bottom-0 z-40 bg-zinc-950 pt-3 pb-4 max-md:-mx-2">
+      <div ref={stripRef} data-board-strip className="sticky bottom-0 z-40 bg-zinc-950 pt-3 pb-4 max-md:-mx-2">
         <BoardFilmStrip size={filmStripSize} onOpen={openFromStrip} />
       </div>
     </>
