@@ -15,6 +15,12 @@ import {
   subscribeBoardLayout,
 } from "@/components/settings/board-layout-store";
 import type { BoardLayout } from "@/components/settings/board-layout-preference";
+import {
+  commitHoverPlay,
+  readHoverPlay,
+  subscribeHoverPlay,
+} from "@/components/settings/hover-play-store";
+import type { HoverPlay } from "@/components/settings/hover-play-preference";
 import { cn } from "@/lib/utils";
 
 /** One setting's options: a value, what to call it, and what it does. */
@@ -36,6 +42,15 @@ const LAYOUTS: readonly Choice<BoardLayout>[] = [
     label: "Row",
     description: "One row per collection, running off the right edge. Scroll it sideways, like the film strip.",
   },
+];
+
+const HOVER_PLAY: readonly Choice<HoverPlay>[] = [
+  {
+    value: "on",
+    label: "On",
+    description: "A clip plays when the pointer comes to rest on it, not as it passes over.",
+  },
+  { value: "off", label: "Off", description: "Clips show their still until you open them." },
 ];
 
 /**
@@ -106,6 +121,7 @@ export function SettingsDialog({
 function SettingsPanel({ onDone }: Readonly<{ onDone: () => void }>) {
   const size = useSyncExternalStore(subscribeFilmStripSize, readFilmStripSize, readFilmStripSize);
   const layout = useSyncExternalStore(subscribeBoardLayout, readBoardLayout, readBoardLayout);
+  const hoverPlay = useSyncExternalStore(subscribeHoverPlay, readHoverPlay, readHoverPlay);
 
   return (
     <div data-settings-panel className="p-5">
@@ -130,6 +146,13 @@ function SettingsPanel({ onDone }: Readonly<{ onDone: () => void }>) {
           options={LAYOUTS}
           chosen={layout}
           onChoose={commitBoardLayout}
+        />
+        <ChoiceGroup
+          legend="Play clips on hover"
+          name="hover-play"
+          options={HOVER_PLAY}
+          chosen={hoverPlay}
+          onChoose={commitHoverPlay}
         />
         <ChoiceGroup
           legend="Film strip size"

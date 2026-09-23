@@ -7,13 +7,15 @@ import { cn } from "@/lib/utils";
 import { RowMenuItems, type RowAction } from "./row-actions";
 
 /**
- * A ROW'S ⋮ MENU: a button at the far right of a collection's row that opens a
- * small menu of what can be done to that row: the row's `RowAction` list (see
- * `row-actions.tsx`), which the phone's swipe tray draws too.
+ * A ⋮ MENU: a button that opens a small menu of what can be done to a thing —
+ * a row (at the far right of its bar) or a clip (on its card) — drawn from its
+ * `RowAction` list (see `row-actions.tsx`).
  *
- * NOT SHOWN ON A PHONE: there the same actions are behind a left swipe on the
- * row (`swipe-row.tsx`). The button is only visually hidden, so a keyboard or
- * a screen reader still reaches the menu, and it shows itself when focused.
+ * A ROW'S IS NOT SHOWN ON A PHONE: there its actions are behind a left swipe on
+ * the row (`swipe-row.tsx`). The button is only visually hidden, so a keyboard
+ * or a screen reader still reaches the menu, and it shows itself when focused.
+ * That is the default look; `buttonClassName` replaces it for a button that
+ * sits somewhere else (a clip card's, which has no swipe and always shows).
  *
  * THE BROWSER'S OWN POPOVER, not a positioned div. `popover="auto"` puts the
  * menu in the top layer, so no row's rounded, clipped box can cut it off and no
@@ -27,10 +29,17 @@ import { RowMenuItems, type RowAction } from "./row-actions";
  * run off the bottom of the window. It closes when the page scrolls, rather
  * than being left hanging where the button used to be.
  */
-export function RowMenu({
+export function ActionMenu({
   label,
   actions,
-}: Readonly<{ label: string; actions: readonly RowAction[] }>) {
+  buttonClassName,
+}: Readonly<{
+  label: string;
+  actions: readonly RowAction[];
+  /** Replaces the ⋮ button's row look (size, place, phone hiding); its
+   *  colours and states stay. */
+  buttonClassName?: string;
+}>) {
   const menuId = useId();
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -131,9 +140,11 @@ export function RowMenu({
         aria-expanded={open}
         aria-label={`More for ${label}`}
         title="More"
-        data-row-menu-button
+        data-menu-button
         className={cn(
-          "flex shrink-0 items-center self-stretch rounded-lg px-1.5 max-md:sr-only max-md:focus-visible:not-sr-only text-zinc-500 transition-colors hover:bg-zinc-700/60 hover:text-zinc-100 focus-visible:bg-zinc-700/60 focus-visible:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500",
+          buttonClassName ??
+            "flex shrink-0 items-center self-stretch rounded-lg px-1.5 max-md:sr-only max-md:focus-visible:not-sr-only",
+          "text-zinc-500 transition-colors hover:bg-zinc-700/60 hover:text-zinc-100 focus-visible:bg-zinc-700/60 focus-visible:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500",
           open && "bg-zinc-700/60 text-zinc-100",
         )}
       >
@@ -145,7 +156,7 @@ export function RowMenu({
         popover="auto"
         role="menu"
         aria-label={label}
-        data-row-menu
+        data-action-menu
         onBeforeToggle={(event) => {
           // Placed before it is first drawn, so it never shows anywhere else.
           if (event.newState === "open") place(event.currentTarget);

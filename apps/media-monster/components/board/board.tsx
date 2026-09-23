@@ -51,7 +51,7 @@ import {
 import { engine } from "@/lib/engine/engine";
 import { FIXTURE_ROOT_ID, loadFixtureGraph } from "@/lib/engine/fixture-document";
 import { BoardFilmStrip } from "./board-film-strip";
-import { RowMenu } from "./row-menu";
+import { ActionMenu } from "./action-menu";
 import type { RowAction } from "./row-actions";
 import { SwipeGroup, SwipeRow } from "./swipe-row";
 import { BoardDragProvider, DropPlaceholder, useBoardDrag } from "./board-drag";
@@ -76,6 +76,11 @@ import {
   subscribeBoardLayout,
 } from "@/components/settings/board-layout-store";
 import type { BoardLayout } from "@/components/settings/board-layout-preference";
+import {
+  readHoverPlay,
+  readHoverPlayOnServer,
+  subscribeHoverPlay,
+} from "@/components/settings/hover-play-store";
 import { switchedOffAt } from "@/lib/engine/branch-activity";
 import {
   encodeInactiveRows,
@@ -192,22 +197,92 @@ function ClipPicture({ media, seconds }: Readonly<{ media: ClipMedia | null; sec
     // eslint-disable-next-line @next/next/no-img-element -- a Cloudinary transform is already the optimised image
     return <img src={cardStill(media, seconds) ?? media.src} alt="" className={frame} />;
   }
+  return <HoverVideo src={media.src} poster={cardStill(media, seconds)} className={frame} />;
+}
+
+/** How long the pointer must stay put on a card before its video plays. */
+const REST_MS = 300;
+/** Movement smaller than this is a hand holding still, not a hand moving on. */
+const REST_JITTER_PX = 3;
+
+/**
+ * A CARD'S VIDEO PLAYS ONCE THE POINTER COMES TO REST ON IT, not as it passes
+ * over: sweeping across a board of cards started every video under the path,
+ * each one fetching. The pointer has to stay within a few pixels for
+ * `REST_MS`; any real movement before then starts the wait again, and once it
+ * plays, moving about the card does not stop it. Leaving stops it and rewinds
+ * it to its still.
+ *
+ * A MOUSE (or pen) ONLY: a touch has no hover, and a tap opens the preview.
+ *
+ * Switched off entirely by the Settings choice "Play clips on hover"
+ * (`hover-play-store.ts`), read live, so turning it off stops a card playing now.
+ */
+function HoverVideo({
+  src,
+  poster,
+  className,
+}: Readonly<{ src: string; poster: string | null; className: string }>) {
+  const hoverPlay = useSyncExternalStore(subscribeHoverPlay, readHoverPlay, readHoverPlayOnServer);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const restRef = useRef<{ x: number; y: number; timer: number } | null>(null);
+
+  const stopWaiting = () => {
+    if (restRef.current !== null) window.clearTimeout(restRef.current.timer);
+    restRef.current = null;
+  };
+  const stop = () => {
+    stopWaiting();
+    const video = videoRef.current;
+    if (video === null || video.paused) return;
+    video.pause();
+    video.currentTime = 0;
+  };
+
+  // Off now: nothing plays, including a card playing when it was switched off.
+  // And no timer outlives the card.
+  useEffect(() => {
+    if (hoverPlay === "off") stop();
+    return stopWaiting;
+    // `stop` and `stopWaiting` read refs only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hoverPlay]);
+
+  const settle = (event: React.PointerEvent<HTMLVideoElement>) => {
+    if (hoverPlay === "off" || event.pointerType === "touch") return;
+    const video = event.currentTarget;
+    if (!video.paused) return;
+    const rest = restRef.current;
+    if (
+      rest !== null &&
+      Math.hypot(event.clientX - rest.x, event.clientY - rest.y) <= REST_JITTER_PX
+    ) {
+      return;
+    }
+    stopWaiting();
+    restRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      timer: window.setTimeout(() => {
+        restRef.current = null;
+        void video.play().catch(() => undefined);
+      }, REST_MS),
+    };
+  };
+
   return (
     <video
-      src={media.src}
-      poster={cardStill(media, seconds) ?? undefined}
+      ref={videoRef}
+      src={src}
+      poster={poster ?? undefined}
       muted
       loop
       playsInline
       preload="none"
-      className={frame}
-      onPointerEnter={(event) => {
-        void event.currentTarget.play().catch(() => undefined);
-      }}
-      onPointerLeave={(event) => {
-        event.currentTarget.pause();
-        event.currentTarget.currentTime = 0;
-      }}
+      className={className}
+      onPointerEnter={settle}
+      onPointerMove={settle}
+      onPointerLeave={stop}
     />
   );
 }
@@ -304,6 +379,59 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
   // Faded while it is the one being dragged, like a dragged row.
   const beingDragged = boardDrag.state.dragId === id;
 
+  // MOVE UP AND DOWN, a clip's keyboard way to reorder, as a row's are: past
+  // the neighbouring CLIP at the same level (not past a row), one undo step
+  // each through `resolveDrop`, and the menu stays open on the moved card.
+  const graph = useGraph();
+  const store = useStore();
+  const parentId = getParent(graph, id);
+  const siblings = parentId === null ? [] : getChildren(graph, parentId);
+  const isClip = (childId: NodeId) => {
+    const child = getNode(graph, childId);
+    return child !== undefined && !child.sealed && child.kind === "clip";
+  };
+  const here = siblings.indexOf(id);
+  const clipBefore = siblings.slice(0, Math.max(0, here)).findLast(isClip) ?? null;
+  const clipAfter = siblings.slice(here + 1).find(isClip) ?? null;
+  const titleOf = (clipId: NodeId) => {
+    const clip = getNode(graph, clipId);
+    return clip !== undefined && !clip.sealed && clip.kind === "clip" ? clip.data.title : "the next clip";
+  };
+  const moveTo = (toIndexBefore: number) => {
+    if (parentId === null) return;
+    const command = store.resolveDrop({
+      type: "move",
+      nodeIds: [id],
+      toParentId: parentId,
+      toIndexBefore,
+    });
+    if (command.ok) store.dispatch(command.value);
+  };
+  const clipActions: readonly RowAction[] = [
+    {
+      id: "move-up",
+      label: "Move up",
+      hint: clipBefore === null ? "Already first" : `Before ${titleOf(clipBefore)}`,
+      icon: <ArrowUp className="size-4" />,
+      disabled: clipBefore === null,
+      keepOpen: true,
+      onSelect: () => {
+        if (clipBefore !== null) moveTo(siblings.indexOf(clipBefore));
+      },
+    },
+    {
+      id: "move-down",
+      label: "Move down",
+      hint: clipAfter === null ? "Already last" : `After ${titleOf(clipAfter)}`,
+      icon: <ArrowDown className="size-4" />,
+      disabled: clipAfter === null,
+      keepOpen: true,
+      onSelect: () => {
+        if (clipAfter !== null) moveTo(siblings.indexOf(clipAfter) + 1);
+      },
+    },
+  ];
+
   // NOT DIMMED WHEN ITS BRANCH IS OFF. The card is material you are keeping
   // either way; the row above says whether it plays (its icon and switch), so
   // the card draws the same in or out of the cut. `data-in-cut` still says
@@ -340,9 +468,9 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
         <span data-clip-picture={id} className="block">
           <ClipPicture media={data.media} seconds={data.seconds} />
         </span>
-        {/* `pr-9` keeps the duration clear of the grip, which sits over the
-            end of this line. */}
-        <span className="flex items-baseline justify-between gap-3 py-2 pr-9 pl-3 max-md:pr-12">
+        {/* The right padding keeps the duration clear of the ⋮ and the grip,
+            which sit over the end of this line. */}
+        <span className="flex items-baseline justify-between gap-3 py-2 pr-16 pl-3 max-md:pr-24">
           <span className="min-w-0 truncate text-sm">{data.title}</span>
           <span className="shrink-0 text-xs tabular-nums text-zinc-500">
             {formatSeconds(data.seconds)}
@@ -353,6 +481,13 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
           the card's button, so pressing it never opens the preview. Press and
           drag to move the clip anywhere in the tree (`board-drag.tsx`).
           Pointer-only for now, like a row's. */}
+      {/* THE CLIP'S ⋮ MENU, just left of the grip (see `action-menu.tsx`).
+          Always shown: a clip has no swipe to hide its actions behind. */}
+      <ActionMenu
+        label={data.title}
+        actions={clipActions}
+        buttonClassName="absolute right-8 bottom-1 flex size-7 items-center justify-center rounded-md max-md:right-11 max-md:bottom-0 max-md:size-11"
+      />
       {/* A button for the same touch-adjustment reason as a row's grip. */}
       <button
         type="button"
@@ -756,7 +891,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
             "group/row flex items-stretch gap-1 rounded-lg transition-colors hover:bg-zinc-800/60",
             intoWhileClosed && "bg-sky-400/10 ring-2 ring-sky-400 ring-inset",
             "has-[[data-collection-toggle]:focus-visible]:bg-zinc-800/60 has-[[data-collection-toggle]:focus-visible]:outline-2 has-[[data-collection-toggle]:focus-visible]:-outline-offset-2 has-[[data-collection-toggle]:focus-visible]:outline-sky-500",
-            "has-[[data-row-menu-button][aria-expanded=true]]:bg-zinc-800/60",
+            "has-[[data-menu-button][aria-expanded=true]]:bg-zinc-800/60",
           )}
         >
           <h3 className="min-w-0 flex-1 text-lg font-semibold text-zinc-100">
@@ -841,8 +976,8 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
               <LogIn className="size-4" aria-hidden="true" />
             </button>
           )}
-          {/* THE ROW'S MENU (see `row-menu.tsx`). Its items are `menuActions`. */}
-          <RowMenu label={data.name} actions={menuActions} />
+          {/* THE ROW'S MENU (see `action-menu.tsx`). Its items are `menuActions`. */}
+          <ActionMenu label={data.name} actions={menuActions} />
           {intoWhileClosed ? (
             <span className="shrink-0 self-center rounded-full bg-sky-400/15 px-2 py-0.5 text-xs text-sky-300">
               Move into
