@@ -38,16 +38,13 @@ import {
   useStore,
 } from "@/lib/engine/bindings";
 import { engine } from "@/lib/engine/engine";
-import {
-  FIXTURE_ROOT_ID,
-  loadFixtureGraph,
-  readUnreadChildren,
-} from "@/lib/engine/fixture-document";
+import { FIXTURE_ROOT_ID, loadFixtureGraph } from "@/lib/engine/fixture-document";
 import { BoardFilmStrip } from "./board-film-strip";
 import { RowMenu } from "./row-menu";
 import type { RowAction } from "./row-actions";
 import { SwipeGroup, SwipeRow } from "./swipe-row";
 import { RowDragProvider, RowDropPlaceholder, useRowDrag } from "./row-drag";
+import { readCollection, restoreSwitchedOff } from "./read-collection";
 import {
   BoardPreview,
   cardPicture,
@@ -236,34 +233,6 @@ const BoardFocusContext = createContext<BoardFocus>({
   shownRootId: null,
   focus: () => undefined,
 });
-
-/**
- * SWITCHED-OFF ROWS, KEPT BETWEEN LOADS (see `inactive-rows-preference.ts`).
- *
- * The document is rebuilt from the fixture on every load, so the rows the
- * cookie names are switched off again by a NON-UNDOABLE write: restoring what
- * you left is not an edit you made this session, and Undo must not offer to
- * take it back.
- *
- * Only ids that are in the graph NOW and still on are written. The rest are
- * not lost: an id inside a folder not read yet (B-roll's Locations) stays in
- * the cookie, and is applied here again when that folder is opened.
- */
-type BoardStore = Pick<ReturnType<typeof engine.createStore>, "getGraph" | "applyNonUndoableWrite">;
-
-function restoreSwitchedOff(store: BoardStore, ids: readonly string[]): void {
-  const graph = store.getGraph();
-  const edits: { nodeId: NodeId; kind: "collection"; edit: { active: false } }[] = [];
-  for (const raw of ids) {
-    const parsed = tryParseNodeId(raw);
-    if (!parsed.ok) continue;
-    const node = getNode(graph, parsed.value);
-    if (node !== undefined && !node.sealed && node.kind === "collection" && node.data.active) {
-      edits.push({ nodeId: parsed.value, kind: "collection", edit: { active: false } });
-    }
-  }
-  if (edits.length > 0) store.applyNonUndoableWrite(edits);
-}
 
 /** Every collection switched off in `graph`, in document order. */
 function switchedOffIds(graph: ReturnType<typeof useGraph>): string[] {
@@ -508,19 +477,9 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   const open = async () => {
     setReading(true);
     setRejection(null);
-    const doc = await readUnreadChildren(id);
-    if (doc === null) {
-      // Storage has nothing for it. Recorded as missing rather than left unread,
-      // so the board stops offering to open something that cannot be read.
-      store.markMissing(id, "storage has no children for this collection");
-    } else {
-      const loaded = store.load(id, doc);
-      if (!loaded.ok) setRejection(`${loaded.error.code}: ${loaded.error.message}`);
-      // Rows switched off in an earlier session that live in THIS folder only
-      // exist now, so their saved state is applied now. Same synchronous block
-      // as the load, so nothing ever records them as on.
-      else restoreSwitchedOff(store, inactiveRowsFromCookies(document.cookie));
-    }
+    // See `read-collection.ts`: the same read a dragged row hovering this
+    // collection starts, so the two cannot disagree about what "read" means.
+    setRejection(await readCollection(store, id));
     setReading(false);
   };
 

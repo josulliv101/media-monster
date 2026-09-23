@@ -5,6 +5,7 @@ import { createContext, use, useRef, useState, type ReactNode } from "react";
 import { GripVertical } from "lucide-react";
 
 import { useStore } from "@/lib/engine/bindings";
+import { isUnread, readCollection } from "./read-collection";
 
 /**
  * DRAGGING A ROW to anywhere in the tree: between two rows at any depth, into
@@ -22,17 +23,28 @@ import { useStore } from "@/lib/engine/bindings";
  * instead. The row being dragged stays where it is, faded, until it lands.
  *
  * WHERE THE POINTER IS decides the target, read off the row under it:
- *   - the top 30% of a row's bar: before that row, among its siblings;
- *   - the bottom 30% of a CLOSED row's bar: after it;
- *   - the rest of a bar (all of an open row's lower part): INTO that row, at
- *     the end of what it holds;
+ *   - anywhere on a row's bar: INTO that row, at the end of what it holds,
+ *     except a thin strip along its edges (`EDGE_BAND_PX`):
+ *   - the top strip, or the gap just above the bar: before that row, among its
+ *     siblings;
+ *   - the bottom strip of a CLOSED row: after it (an open row's bottom edge
+ *     runs into its own contents, so there it stays "into");
  *   - a row's footer (its "Add clip" line, below everything it holds): after
  *     that row, one level up. This is how a row is moved out and higher: past
  *     the end of the row it is in.
- * Anywhere else inside the board keeps the last target, so the gaps between
- * rows, the cards and the placeholder itself (which the pointer sits on once
- * the rows have parted) do not flicker it away. Outside the board there is no
- * target, and letting go there puts nothing anywhere.
+ * INTO GETS NEARLY ALL OF THE BAR. It had only the middle 40%, and because the
+ * rows part, a pointer heading down onto a row opened a gap above it first,
+ * which pushed the row down and left the pointer on its edge or in the gap:
+ * "into" was reachable only dead centre.
+ * Anywhere else inside the board keeps the last target, so the cards and the
+ * placeholder itself (which the pointer sits on once the rows have parted) do
+ * not flicker it away. Outside the board there is no target, and letting go
+ * there puts nothing anywhere.
+ *
+ * A ROW NOT READ YET (B-roll) IS READ ON HOVER. The engine will not move
+ * anything into a collection whose real children it has never seen, so
+ * hovering one starts the same read its Open button does; the label says
+ * "Opening" meanwhile, and the drop is allowed the moment it lands.
  *
  * THE ENGINE DECIDES WHAT IS LEGAL. Every candidate goes through
  * `store.resolveDrop` — the only place a post-removal index is computed — which
@@ -75,6 +87,10 @@ export function useRowDrag(): RowDragValue {
   return use(RowDragContext);
 }
 
+/** The strip along a bar's top (and a closed bar's bottom) that means "beside"
+ *  rather than "into"; the gap above a bar, this deep, means "before". */
+const EDGE_BAND_PX = 8;
+const GAP_ABOVE_PX = 20;
 /** How far the pointer moves before a press on the grip becomes a drag. */
 const START_PX = 4;
 /** Within this far of the top of the window, or of the film strip, the page scrolls. */
@@ -97,7 +113,9 @@ function sameTarget(a: RowDropTarget | null, b: RowDropTarget | null): boolean {
 export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>) {
   const store = useStore();
   const [state, setState] = useState<RowDragState>(IDLE);
-  const [refused, setRefused] = useState(false);
+  // Why the spot under the pointer takes nothing: refused outright, or a
+  // collection being read so that it can.
+  const [refused, setRefused] = useState<"no" | "refused" | "reading">("no");
   const stateRef = useRef<RowDragState>(IDLE);
   const labelRef = useRef<HTMLDivElement>(null);
 
@@ -132,10 +150,9 @@ export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>)
       const isRoot = header.dataset.rowRoot === "true";
       const open = header.dataset.rowOpen === "true";
       const box = header.getBoundingClientRect();
-      const at = (y - box.top) / Math.max(1, box.height);
       // The row the board is showing has no visible parent to sit beside.
-      if (!isRoot && at < 0.3) return siblingSpot(id, false);
-      if (!isRoot && !open && at > 0.7) return siblingSpot(id, true);
+      if (!isRoot && y < box.top + EDGE_BAND_PX) return siblingSpot(id, false);
+      if (!isRoot && !open && y > box.bottom - EDGE_BAND_PX) return siblingSpot(id, true);
       return intoSpot(id);
     }
     const footer = hit.closest<HTMLElement>("[data-row-footer]");
@@ -144,12 +161,27 @@ export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>)
       // Past the end of the board's own top: the end of what it holds.
       return footer.dataset.rowRoot === "true" ? intoSpot(id) : siblingSpot(id, true);
     }
+    // THE GAP ABOVE A BAR is "before that row": the space between two rows is
+    // where people aim to put something between them.
+    for (const above of document.querySelectorAll<HTMLElement>("[data-row-header]")) {
+      if (above.dataset.rowRoot === "true") continue;
+      const box = above.getBoundingClientRect();
+      if (x >= box.left && x <= box.right && y >= box.top - GAP_ABOVE_PX && y < box.top) {
+        return siblingSpot(above.dataset.rowHeader as NodeId, false);
+      }
+    }
     return "keep";
   };
 
   // THE ENGINE'S VERDICT on a candidate: a target, "stay" (it would not move),
   // or "refused".
-  const judge = (dragId: NodeId, candidate: Candidate): RowDropTarget | "stay" | "refused" => {
+  const judge = (
+    dragId: NodeId,
+    candidate: Candidate,
+  ): RowDropTarget | "stay" | "refused" | "unread" => {
+    if (candidate.kind === "into" && isUnread(store.getGraph(), candidate.parentId)) {
+      return "unread";
+    }
     const resolved = store.resolveDrop({
       type: "move",
       nodeIds: [dragId],
@@ -178,6 +210,8 @@ export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>)
     // anywhere: measured, a drop aimed at "Shots, every take" landed in the
     // row that had scrolled under it instead.
     let scrollArmed = false;
+    // Collections this drag has started reading, so a hover reads each once.
+    const reading = new Set<NodeId>();
 
     const place = (x: number, y: number) => {
       const label = labelRef.current;
@@ -188,14 +222,23 @@ export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>)
       const candidate = candidateAt(lastX, lastY);
       if (candidate === "keep") return;
       let next: RowDropTarget | null = null;
-      let isRefused = false;
+      let why: "no" | "refused" | "reading" = "no";
       if (candidate !== null) {
         const verdict = judge(id, candidate);
-        if (verdict === "refused") isRefused = true;
-        else if (verdict !== "stay") next = verdict;
+        if (verdict === "refused") why = "refused";
+        else if (verdict === "unread") {
+          why = "reading";
+          if (!reading.has(candidate.parentId)) {
+            reading.add(candidate.parentId);
+            // Once it lands the spot is judged again, still under the pointer.
+            void readCollection(store, candidate.parentId).then(() => {
+              if (stateRef.current.dragId === id) retarget();
+            });
+          }
+        } else if (verdict !== "stay") next = verdict;
       }
-      setRefused(isRefused);
-      document.documentElement.classList.toggle("row-drag-refused", isRefused);
+      setRefused(why);
+      document.documentElement.classList.toggle("row-drag-refused", why === "refused");
       if (!sameTarget(next, stateRef.current.target)) {
         publish({ ...stateRef.current, target: next });
       }
@@ -242,7 +285,7 @@ export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>)
         });
         if (resolved.ok) store.dispatch(resolved.value);
       }
-      setRefused(false);
+      setRefused("no");
       publish(IDLE);
     };
 
@@ -293,7 +336,11 @@ export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>)
         >
           <GripVertical className="size-3.5 text-zinc-500" />
           {state.dragName}
-          {refused ? <span className="ml-1 text-xs font-normal text-red-400">Can’t go here</span> : null}
+          {refused === "refused" ? (
+            <span className="ml-1 text-xs font-normal text-red-400">Can’t go here</span>
+          ) : refused === "reading" ? (
+            <span className="ml-1 text-xs font-normal text-amber-300">Opening…</span>
+          ) : null}
         </div>
       )}
     </RowDragContext>
