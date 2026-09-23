@@ -11,7 +11,7 @@ import {
 } from "@josulliv101/nested-collections";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ChevronRight, Film, Layers, LogIn, Redo2, Undo2 } from "lucide-react";
+import { ChevronRight, Film, GripVertical, Layers, LogIn, Redo2, Undo2 } from "lucide-react";
 
 import {
   NodeSlot,
@@ -718,9 +718,21 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
               <LogIn className="size-4" aria-hidden="true" />
             </button>
           )}
-          {/* THE ROW'S MENU, last in the row so every ⋮ sits against its box's
-              right edge (see `row-menu.tsx`). Its items are `menuActions`. */}
+          {/* THE ROW'S MENU (see `row-menu.tsx`). Its items are `menuActions`. */}
           <RowMenu label={data.name} actions={menuActions} />
+          {/* THE DRAG GRIP, last in the row so every grip sits against its
+              box's right edge. DRAWN ONLY FOR NOW: rows are to be dragged to a
+              new place among their siblings, or deeper or higher in the tree,
+              and this is where that will be picked up. Until it does something
+              it is decorative — hidden from assistive tech, no grab cursor,
+              nothing to focus — so it promises nothing it cannot do. */}
+          <span
+            aria-hidden="true"
+            data-row-drag-handle
+            className="flex shrink-0 items-center self-stretch px-1 text-zinc-600"
+          >
+            <GripVertical className="size-4" />
+          </span>
         </header>
       </SwipeRow>
 
