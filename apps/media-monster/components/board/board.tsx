@@ -716,26 +716,55 @@ if (!registeredWith.has(defineNodeView)) {
   defineNodeView("collection", CollectionCard);
 }
 
-function Toolbar({ rootId }: Readonly<{ rootId: ReturnType<typeof parseNodeId> }>) {
+/**
+ * THE TOP BAR of the main content: the document's title on the far left, the
+ * reel's running time beside it, and undo and redo on the far right.
+ *
+ * THE TITLE IS THE ROOT COLLECTION'S NAME, read from the document rather than
+ * typed into the page, so the heading cannot disagree with the data it heads.
+ * It names the document whatever the board is looking at — "go to" changes the
+ * board, not which document this is; the trail below says where you are.
+ */
+function TopNav({ rootId }: Readonly<{ rootId: ReturnType<typeof parseNodeId> }>) {
   const { canUndo, canRedo, undo, redo } = useHistory();
+  const root = useNode(rootId);
+  const title =
+    root !== undefined && !root.sealed && root.kind === "collection" ? root.data.name : "Untitled";
   // THE REEL IS WHAT PLAYS: active clips only, so this agrees with the strip.
   const total = useFold("activeSeconds", rootId);
   const button =
     "flex items-center gap-1.5 rounded-md border border-zinc-800 px-2.5 py-1.5 text-xs text-zinc-300 transition-colors hover:border-zinc-700 hover:text-zinc-50 disabled:cursor-not-allowed disabled:border-zinc-900 disabled:text-zinc-700";
   return (
-    <div className="mb-4 flex items-center gap-2">
-      <button type="button" disabled={!canUndo} onClick={() => undo()} className={button}>
-        <Undo2 className="size-3.5" /> Undo
-      </button>
-      <button type="button" disabled={!canRedo} onClick={() => redo()} className={button}>
-        <Redo2 className="size-3.5" /> Redo
-      </button>
-      {total ? (
-        <span className="ml-2 text-xs">
-          Reel runs <Duration value={total.value} certainty={total.certainty} />
-        </span>
-      ) : null}
-    </div>
+    <header
+      data-top-nav
+      className="mb-4 flex items-center justify-between gap-3 border-b border-zinc-800 pb-3"
+    >
+      {/* Centred rather than baseline-aligned, so the divider sits in the
+          middle of the row between text of two different sizes. */}
+      <div className="flex min-w-0 items-center gap-3">
+        <h1 className="truncate text-lg font-semibold text-zinc-100">{title}</h1>
+        {/* A vertical rule between the title and what follows it, with room
+            to breathe: `mx-2` on top of the row's gap, 20px either side. */}
+        <span
+          aria-hidden="true"
+          data-top-nav-divider
+          className="mx-2 h-5 w-px shrink-0 bg-zinc-700"
+        />
+        {total ? (
+          <span className="shrink-0 text-xs">
+            Reel runs <Duration value={total.value} certainty={total.certainty} />
+          </span>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <button type="button" disabled={!canUndo} onClick={() => undo()} className={button}>
+          <Undo2 className="size-3.5" /> Undo
+        </button>
+        <button type="button" disabled={!canRedo} onClick={() => redo()} className={button}>
+          <Redo2 className="size-3.5" /> Redo
+        </button>
+      </div>
+    </header>
   );
 }
 
@@ -871,7 +900,7 @@ function BoardBody({
     <>
       {/* The REEL's controls: undo, redo and the running time stay about the
           whole document wherever the board is looking. */}
-      <Toolbar rootId={topId} />
+      <TopNav rootId={topId} />
       {focusedId === null ? null : <FocusTrail shownRootId={focusedId} onGo={focus} />}
       <BoardFocusContext value={{ shownRootId, focus }}>
         <BoardLayoutContext value={boardLayout}>

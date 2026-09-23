@@ -44,12 +44,15 @@ export default async function Home() {
     // bottom of the viewport even when the board above it is short (every
     // collection closed). `main` is the column above this; the board ends in a
     // spacer that takes up whatever height is left.
-    <div className="flex flex-1 flex-col pt-10">
-      <h1 className="mb-1 text-lg font-semibold text-zinc-100">Toon Town</h1>
-      <p className="mb-6 text-sm text-zinc-500">
-        A fixture document, running on the nested-collections engine. Changes are
-        undoable and are lost on reload.
-      </p>
+    //
+    // NO HEADING HERE: the board's own top bar carries the title, read from the
+    // document, beside undo and redo.
+    //
+    // `md:pt-[13px]` LINES THAT BAR UP WITH THE MONSTER in the rail: with
+    // `main`'s own 13px above it, the bar's title and buttons centre on the
+    // same line as the creature. Measured, not reasoned: at 16px they sat 3px
+    // low. On a phone the rail is a drawer, so there is nothing to line up with.
+    <div className="flex flex-1 flex-col pt-4 md:pt-[13px]">
       <Board
         initialFilmStripSize={filmStripSize}
         initialBoardLayout={boardLayout}
