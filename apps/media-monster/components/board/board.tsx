@@ -35,6 +35,8 @@ import {
 } from "@/lib/engine/fixture-document";
 import { BoardFilmStrip } from "./board-film-strip";
 import { RowMenu } from "./row-menu";
+import type { RowAction } from "./row-actions";
+import { SwipeGroup, SwipeRow } from "./swipe-row";
 import {
   BoardPreview,
   cardPicture,
@@ -353,28 +355,6 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
   );
 }
 
-/**
- * The on/off switch in a row's menu: a track, and a knob that slides right when on.
- * Drawn only; the menu item around it owns the semantics.
- */
-function SwitchTrack({ on }: Readonly<{ on: boolean }>) {
-  return (
-    <span
-      aria-hidden="true"
-      className={cn(
-        "relative inline-flex h-4 w-7 shrink-0 items-center rounded-full transition-colors duration-150",
-        on ? "bg-sky-500" : "bg-zinc-700",
-      )}
-    >
-      <span
-        className={cn(
-          "absolute left-0.5 size-3 rounded-full bg-white shadow transition-transform duration-150 motion-reduce:transition-none",
-          on ? "translate-x-3" : "translate-x-0",
-        )}
-      />
-    </span>
-  );
-}
 
 
 function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
@@ -398,6 +378,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   // "Root" means whatever the board is SHOWING as its root: after "go to", the
   // collection you went to opens, and everything inside it starts closed.
   const { shownRootId, focus } = use(BoardFocusContext);
+
   const branch = use(BranchContext);
 
   // IN THE CUT, per branch. `data.active` is this row's own setting; it counts
@@ -418,6 +399,35 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
     });
   };
   const isRoot = id === (shownRootId ?? graph.rootIds[0]);
+
+  // WHAT CAN BE DONE TO THIS ROW, as one list (see `row-actions.tsx`). The ⋮
+  // menu shows `menuActions`; a phone's swipe tray shows `trayActions`, which
+  // adds "go to" — on a wide screen that has its own icon in the bar.
+  const activeAction: RowAction = {
+    id: "active",
+    label: "Active",
+    hint: parentOff
+      ? `Off because ${branch.offByName ?? "a collection above"} is off`
+      : on
+        ? "In the film strip"
+        : "Not in the film strip",
+    checked: on,
+    disabled: parentOff,
+    title: parentOff ? `Off because ${branch.offByName ?? "a collection above"} is off` : undefined,
+    onSelect: toggleActive,
+  };
+  const menuActions: readonly RowAction[] = [activeAction];
+  const trayActions: readonly RowAction[] = isRoot
+    ? menuActions
+    : [
+        {
+          id: "go-to",
+          label: "Go to",
+          icon: <LogIn className="size-4" />,
+          onSelect: () => focus(id),
+        },
+        ...menuActions,
+      ];
   // THE REAL ROOT IS NOT DRAWN AS A BOX. It is the board itself — the page's
   // heading names it and the toolbar carries its running time — so its
   // children are the top level. A collection "gone to" keeps its box: it is the
@@ -606,125 +616,101 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
           shrinking anything's natural width) and pads back by the same 6px,
           so the text sits exactly where the padding put it. The hover tint and
           focus ring then read as the bar, not as a tight box round the name. */}
-      <header
-        className={cn("-mx-1.5 -mt-1.5 flex items-stretch gap-1", collapsed ? "-mb-1.5" : "mb-0.5")}
+      {/* ON A PHONE THE BAR SWIPES LEFT to show the row's actions behind it
+          (`swipe-row.tsx`); the ⋮ and "go to" leave the bar there. */}
+      <SwipeRow
+        id={id}
+        actions={trayActions}
+        className={cn("-mx-1.5 -mt-1.5", collapsed ? "-mb-1.5" : "mb-0.5")}
       >
-        <h3 className="min-w-0 flex-1 text-lg font-semibold text-zinc-100">
-          <button
-            type="button"
-            aria-expanded={!collapsed}
-            aria-controls={bodyId}
-            data-collection-toggle
-            onClick={() => setCollapsed((was) => !was)}
-            className="group flex w-full items-center gap-3 rounded-lg px-1.5 py-3 text-left transition-colors hover:bg-zinc-800/60 focus-visible:bg-zinc-800/60 focus-visible:outline-2 focus-visible:outline-sky-500"
-          >
-            {/* BASELINE, so the small duration sits on the name's line rather
-                than centred against its taller box; the icon and the triangle
-                centre themselves. */}
-            <span className="flex min-w-0 items-baseline gap-2">
-              {/* IN THE STRIP OR NOT, AT A GLANCE, first in the row. One slot,
-                  the same size in both states so the names line up down the
-                  board: a white film icon on a small solid blue chip while this
-                  branch plays — the switch's "on" blue, carried by a shape
-                  rather than by coloured text, which read poorly — and the
-                  collections icon, unfilled, when it does not. Layers is the
-                  icon this project already means "collection" by (the film
-                  strip's section labels, the old app's collection cards).
-                  `mr-1` on top of the gap sets it apart from the name. Nothing
-                  here dims: the row is still a row you open and read. The
-                  switch carries the state for assistive tech, so this is
-                  decorative. */}
-              <span
-                aria-hidden="true"
-                className={cn(
-                  "mr-1 flex size-6 shrink-0 items-center justify-center self-center rounded-md",
-                  on ? "bg-sky-500" : null,
-                )}
-              >
-                {on ? (
-                  // Turned a quarter so the film runs SIDEWAYS, like the strip at the
-                  // bottom of the board: sprocket holes top and bottom, not left
-                  // and right.
-                  <Film data-collection-in-cut className="size-3.5 rotate-90 text-white" />
-                ) : (
-                  <Layers data-collection-out-of-cut className="size-4 text-zinc-300" />
-                )}
-              </span>
-              <span className="truncate">{data.name}</span>
-              {/* THE DURATION RIDES WITH THE NAME, small and quiet: it is
-                  about the row, but the name is what you read. */}
-              {total ? (
-                <span className="shrink-0 text-xs font-normal">
-                  <Duration value={total.value} certainty={total.certainty} quiet />
+        <header className="flex items-stretch gap-1">
+          <h3 className="min-w-0 flex-1 text-lg font-semibold text-zinc-100">
+            <button
+              type="button"
+              aria-expanded={!collapsed}
+              aria-controls={bodyId}
+              data-collection-toggle
+              onClick={() => setCollapsed((was) => !was)}
+              className="group flex w-full items-center gap-3 rounded-lg px-1.5 py-3 text-left transition-colors hover:bg-zinc-800/60 focus-visible:bg-zinc-800/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-500"
+            >
+              {/* BASELINE, so the small duration sits on the name's line rather
+                  than centred against its taller box; the icon and the triangle
+                  centre themselves. */}
+              <span className="flex min-w-0 items-baseline gap-2">
+                {/* IN THE STRIP OR NOT, AT A GLANCE, first in the row. One slot,
+                    the same size in both states so the names line up down the
+                    board: a white film icon on a small solid blue chip while this
+                    branch plays — the switch's "on" blue, carried by a shape
+                    rather than by coloured text, which read poorly — and the
+                    collections icon, unfilled, when it does not. Layers is the
+                    icon this project already means "collection" by (the film
+                    strip's section labels, the old app's collection cards).
+                    `mr-1` on top of the gap sets it apart from the name. Nothing
+                    here dims: the row is still a row you open and read. The
+                    switch carries the state for assistive tech, so this is
+                    decorative. */}
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    "mr-1 flex size-6 shrink-0 items-center justify-center self-center rounded-md",
+                    on ? "bg-sky-500" : null,
+                  )}
+                >
+                  {on ? (
+                    // Turned a quarter so the film runs SIDEWAYS, like the strip at the
+                    // bottom of the board: sprocket holes top and bottom, not left
+                    // and right.
+                    <Film data-collection-in-cut className="size-3.5 rotate-90 text-white" />
+                  ) : (
+                    <Layers data-collection-out-of-cut className="size-4 text-zinc-300" />
+                  )}
                 </span>
-              ) : null}
-              {/* AFTER THE NAME AND ITS DURATION. Points right when closed and
-                  down when open; brightens with the bar on hover and focus. */}
-              <svg
-                viewBox="0 0 10 10"
-                aria-hidden="true"
-                className={cn(
-                  "ml-0.5 size-3 shrink-0 self-center fill-zinc-500 transition-[rotate,fill] duration-150 group-hover:fill-zinc-100 group-focus-visible:fill-zinc-100 motion-reduce:transition-none",
-                  collapsed ? null : "rotate-90",
-                )}
-              >
-                <path d="M2.5 1 L8.5 5 L2.5 9 Z" />
-              </svg>
-            </span>
-          </button>
-        </h3>
-        {/* GO TO: make this collection the top of the board. Its own button
-            beside the duration rather than part of the bar, because the bar
-            already means "open or close", and a click cannot mean both. Not on
-            the collection that is already the top — there is nowhere to go. */}
-        {isRoot ? null : (
-          <button
-            type="button"
-            aria-label={`Go to ${data.name}`}
-            title={`Go to ${data.name}: show it, and everything inside it, on its own`}
-            data-collection-focus
-            onClick={() => focus(id)}
-            className="flex shrink-0 items-center rounded-lg px-2 text-zinc-500 transition-colors hover:bg-zinc-800/60 hover:text-zinc-100 focus-visible:bg-zinc-800/60 focus-visible:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500"
-          >
-            {/* LogIn — an arrow going IN through a door: "enter this collection",
-                which is what the button does. */}
-            <LogIn className="size-4" aria-hidden="true" />
-          </button>
-        )}
-        {/* THE ROW'S MENU, last in the row so every ⋮ sits against its box's
-            right edge (see `row-menu.tsx`). Its one item for now is the switch
-            that puts this whole branch in the film strip or takes it out:
-            disabled, and shown off, while a row above is off. The menu stays
-            open when it is flipped, so the switch is seen to move. */}
-        <RowMenu label={data.name}>
-          <button
-            type="button"
-            role="menuitemcheckbox"
-            aria-checked={on}
-            disabled={parentOff}
-            title={
-              parentOff
-                ? `Off because ${branch.offByName ?? "a collection above"} is off`
-                : undefined
-            }
-            data-collection-active
-            onClick={toggleActive}
-            className="flex w-full items-center justify-between gap-6 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-zinc-800 focus-visible:bg-zinc-800 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
-          >
-            <span className="flex min-w-0 flex-col">
-              <span className="text-sm text-zinc-100">Active</span>
-              <span className="text-xs text-zinc-500">
-                {parentOff
-                  ? `Off because ${branch.offByName ?? "a collection above"} is off`
-                  : on
-                    ? "In the film strip"
-                    : "Not in the film strip"}
+                <span className="truncate">{data.name}</span>
+                {/* THE DURATION RIDES WITH THE NAME, small and quiet: it is
+                    about the row, but the name is what you read. */}
+                {total ? (
+                  <span className="shrink-0 text-xs font-normal">
+                    <Duration value={total.value} certainty={total.certainty} quiet />
+                  </span>
+                ) : null}
+                {/* AFTER THE NAME AND ITS DURATION. Points right when closed and
+                    down when open; brightens with the bar on hover and focus. */}
+                <svg
+                  viewBox="0 0 10 10"
+                  aria-hidden="true"
+                  className={cn(
+                    "ml-0.5 size-3 shrink-0 self-center fill-zinc-500 transition-[rotate,fill] duration-150 group-hover:fill-zinc-100 group-focus-visible:fill-zinc-100 motion-reduce:transition-none",
+                    collapsed ? null : "rotate-90",
+                  )}
+                >
+                  <path d="M2.5 1 L8.5 5 L2.5 9 Z" />
+                </svg>
               </span>
-            </span>
-            <SwitchTrack on={on} />
-          </button>
-        </RowMenu>
-      </header>
+            </button>
+          </h3>
+          {/* GO TO: make this collection the top of the board. Its own button
+              beside the duration rather than part of the bar, because the bar
+              already means "open or close", and a click cannot mean both. Not on
+              the collection that is already the top — there is nowhere to go. */}
+          {isRoot ? null : (
+            <button
+              type="button"
+              aria-label={`Go to ${data.name}`}
+              title={`Go to ${data.name}: show it, and everything inside it, on its own`}
+              data-collection-focus
+              onClick={() => focus(id)}
+              className="flex shrink-0 items-center rounded-lg px-2 text-zinc-500 transition-colors max-md:sr-only max-md:focus-visible:not-sr-only hover:bg-zinc-800/60 hover:text-zinc-100 focus-visible:bg-zinc-800/60 focus-visible:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500"
+            >
+              {/* LogIn — an arrow going IN through a door: "enter this collection",
+                  which is what the button does. */}
+              <LogIn className="size-4" aria-hidden="true" />
+            </button>
+          )}
+          {/* THE ROW'S MENU, last in the row so every ⋮ sits against its box's
+              right edge (see `row-menu.tsx`). Its items are `menuActions`. */}
+          <RowMenu label={data.name} actions={menuActions} />
+        </header>
+      </SwipeRow>
 
       {/* Always in the DOM so `aria-controls` names something; its contents
           render only while open, so a closed collection mounts none of its
@@ -1092,7 +1078,9 @@ function BoardBody({
                   the new top opens and everything inside it starts closed, rather
                   than inheriting whatever state that card had deeper in the tree. */}
               <BranchContext value={rootBranch}>
-                <NodeSlot key={shownRootId} id={shownRootId} />
+                <SwipeGroup>
+                  <NodeSlot key={shownRootId} id={shownRootId} />
+                </SwipeGroup>
               </BranchContext>
             </BoardPreviewContext>
           </BoardLayoutContext>
