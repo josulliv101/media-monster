@@ -10,6 +10,10 @@ import {
   boardLayoutFromValue,
 } from "@/components/settings/board-layout-preference";
 import {
+  BOARD_SAVED_COOKIE,
+  hasSavedBoardFromValue,
+} from "@/components/settings/saved-board-preference";
+import {
   INACTIVE_ROWS_COOKIE,
   inactiveRowsFromValue,
 } from "@/components/settings/inactive-rows-preference";
@@ -35,6 +39,9 @@ export default async function Home() {
   const filmStripSize = filmStripSizeFromValue(jar.get(FILM_STRIP_SIZE_COOKIE)?.value);
   const boardLayout = boardLayoutFromValue(jar.get(BOARD_LAYOUT_COOKIE)?.value);
   const inactiveRows = inactiveRowsFromValue(jar.get(INACTIVE_ROWS_COOKIE)?.value);
+  // The board is saved in the browser; this only says whether one is there, so
+  // the first paint is a loading state rather than the sample (see the cookie).
+  const hasSavedBoard = hasSavedBoardFromValue(jar.get(BOARD_SAVED_COOKIE)?.value);
   return (
     // FULL WIDTH. The shell's <main> already pads the sides; a reel of video
     // cards wants every column the window can give it.
@@ -57,6 +64,7 @@ export default async function Home() {
         initialFilmStripSize={filmStripSize}
         initialBoardLayout={boardLayout}
         initialInactiveRows={inactiveRows}
+        hasSavedBoard={hasSavedBoard}
       />
     </div>
   );
