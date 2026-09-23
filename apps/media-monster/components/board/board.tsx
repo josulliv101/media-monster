@@ -34,6 +34,7 @@ import {
   readUnreadChildren,
 } from "@/lib/engine/fixture-document";
 import { BoardFilmStrip } from "./board-film-strip";
+import { RowMenu } from "./row-menu";
 import {
   BoardPreview,
   cardPicture,
@@ -339,8 +340,8 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
 }
 
 /**
- * The on/off switch a row wears: a track, and a knob that slides right when on.
- * Drawn only; the button around it owns the semantics.
+ * The on/off switch in a row's menu: a track, and a knob that slides right when on.
+ * Drawn only; the menu item around it owns the semantics.
  */
 function SwitchTrack({ on }: Readonly<{ on: boolean }>) {
   return (
@@ -671,32 +672,39 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
             <LogIn className="size-4" aria-hidden="true" />
           </button>
         )}
-        {/* IN THE CUT OR NOT, for this whole branch. Its own control beside
-            the bar, for the reason "go to" is: the bar means open or close.
-            Disabled, and shown off, while a row above is off.
-
-            LAST IN THE ROW, so every switch sits against its box's right edge.
-            Before "go to" it was pushed left by that icon on every row but the
-            top one, which has no icon — a 49px stagger down the right side. */}
-        <button
-          type="button"
-          role="switch"
-          aria-checked={on}
-          aria-label={`Active: ${data.name}`}
-          disabled={parentOff}
-          title={
-            parentOff
-              ? `Off because ${branch.offByName ?? "a collection above"} is off`
-              : on
-                ? `${data.name} is in the film strip. Switch off to take it out.`
-                : `${data.name} is out of the film strip. Switch on to put it back.`
-          }
-          data-collection-active
-          onClick={toggleActive}
-          className="flex shrink-0 items-center rounded-lg px-1.5 transition-colors hover:bg-zinc-800/60 focus-visible:outline-2 focus-visible:outline-sky-500 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-        >
-          <SwitchTrack on={on} />
-        </button>
+        {/* THE ROW'S MENU, last in the row so every ⋮ sits against its box's
+            right edge (see `row-menu.tsx`). Its one item for now is the switch
+            that puts this whole branch in the film strip or takes it out:
+            disabled, and shown off, while a row above is off. The menu stays
+            open when it is flipped, so the switch is seen to move. */}
+        <RowMenu label={data.name}>
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={on}
+            disabled={parentOff}
+            title={
+              parentOff
+                ? `Off because ${branch.offByName ?? "a collection above"} is off`
+                : undefined
+            }
+            data-collection-active
+            onClick={toggleActive}
+            className="flex w-full items-center justify-between gap-6 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-zinc-800 focus-visible:bg-zinc-800 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+          >
+            <span className="flex min-w-0 flex-col">
+              <span className="text-sm text-zinc-100">Active</span>
+              <span className="text-xs text-zinc-500">
+                {parentOff
+                  ? `Off because ${branch.offByName ?? "a collection above"} is off`
+                  : on
+                    ? "In the film strip"
+                    : "Not in the film strip"}
+              </span>
+            </span>
+            <SwitchTrack on={on} />
+          </button>
+        </RowMenu>
       </header>
 
       {/* Always in the DOM so `aria-controls` names something; its contents
