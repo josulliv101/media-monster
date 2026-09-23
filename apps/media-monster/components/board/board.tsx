@@ -331,7 +331,7 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
         </span>
         {/* `pr-9` keeps the duration clear of the grip, which sits over the
             end of this line. */}
-        <span className="flex items-baseline justify-between gap-3 py-2 pr-9 pl-3">
+        <span className="flex items-baseline justify-between gap-3 py-2 pr-9 pl-3 max-md:pr-12">
           <span className="min-w-0 truncate text-sm">{data.title}</span>
           <span className="shrink-0 text-xs tabular-nums text-zinc-500">
             {formatSeconds(data.seconds)}
@@ -342,16 +342,19 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
           the card's button, so pressing it never opens the preview. Press and
           drag to move the clip anywhere in the tree (`board-drag.tsx`).
           Pointer-only for now, like a row's. */}
-      <span
+      {/* A button for the same touch-adjustment reason as a row's grip. */}
+      <button
+        type="button"
+        tabIndex={-1}
         aria-hidden="true"
         data-clip-drag-handle
         title="Drag to move"
-        style={{ touchAction: "none" }}
         onPointerDown={(event) => boardDrag.start(id, data.title, "clip", event)}
-        className="absolute right-1 bottom-1 flex size-7 cursor-grab items-center justify-center rounded-md text-zinc-600 transition-colors hover:bg-zinc-700/60 hover:text-zinc-200"
+        // 44px on a phone, as a row's grip is, and for the same reason.
+        className="absolute right-1 bottom-1 flex size-7 cursor-grab touch-none items-center justify-center rounded-md text-zinc-600 transition-colors select-none [-webkit-touch-callout:none] hover:bg-zinc-700/60 hover:text-zinc-200 max-md:right-0 max-md:bottom-0 max-md:size-11"
       >
         <GripVertical className="size-4" />
-      </span>
+      </button>
     </div>
   );
 }
@@ -783,16 +786,29 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
               Pointer-only for now, so it stays out of the accessibility tree
               rather than announce a control a keyboard cannot use. */}
           {isRoot ? null : (
-            <span
+            // A BUTTON, not a span, so a phone's touch adjustment counts it as
+            // something to tap: Chrome moves a touch that lands near a button
+            // onto that button, and with the grip a span, a touch inside the
+            // grip's left edge was moved onto the row's bar (measured with
+            // real touch input: 18px left of centre, on the grip, no drag).
+            // Out of the tab order and hidden from assistive tech until a
+            // keyboard can move rows.
+            <button
+              type="button"
+              tabIndex={-1}
               aria-hidden="true"
               data-row-drag-handle
               title="Drag to move"
-              style={{ touchAction: "none" }}
               onPointerDown={(event) => boardDrag.start(id, data.name, "row", event)}
-              className="flex shrink-0 cursor-grab items-center self-stretch rounded-lg px-1 text-zinc-600 transition-colors hover:bg-zinc-700/60 hover:text-zinc-200"
+              // A THUMB-SIZED TARGET ON A PHONE: 44px wide there, the icon
+              // centred in it. At 24px, against the screen edge and beside a
+              // bar that swipes and scrolls, a touch 14px left of the icon's
+              // centre (measured, real touch input) grabbed the bar instead
+              // and no drag started. No long-press callout or selection.
+              className="flex shrink-0 cursor-grab touch-none items-center self-stretch rounded-lg px-1 text-zinc-600 transition-colors select-none [-webkit-touch-callout:none] hover:bg-zinc-700/60 hover:text-zinc-200 max-md:w-11 max-md:justify-center"
             >
               <GripVertical className="size-4" />
-            </span>
+            </button>
           )}
         </header>
       </SwipeRow>
