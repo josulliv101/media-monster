@@ -9,8 +9,9 @@ import {
   tryParseNodeId,
   type NodeId,
 } from "@josulliv101/nested-collections";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ChevronRight, Film, Layers, LogIn, Redo2, Undo2 } from "lucide-react";
+import { ChevronRight, Film, GripVertical, Layers, LogIn, Redo2, Undo2 } from "lucide-react";
 
 import {
   NodeSlot,
@@ -717,9 +718,21 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
               <LogIn className="size-4" aria-hidden="true" />
             </button>
           )}
-          {/* THE ROW'S MENU, last in the row so every ⋮ sits against its box's
-              right edge (see `row-menu.tsx`). Its items are `menuActions`. */}
+          {/* THE ROW'S MENU (see `row-menu.tsx`). Its items are `menuActions`. */}
           <RowMenu label={data.name} actions={menuActions} />
+          {/* THE DRAG GRIP, last in the row so every grip sits against its
+              box's right edge. DRAWN ONLY FOR NOW: rows are to be dragged to a
+              new place among their siblings, or deeper or higher in the tree,
+              and this is where that will be picked up. Until it does something
+              it is decorative — hidden from assistive tech, no grab cursor,
+              nothing to focus — so it promises nothing it cannot do. */}
+          <span
+            aria-hidden="true"
+            data-row-drag-handle
+            className="flex shrink-0 items-center self-stretch px-1 text-zinc-600"
+          >
+            <GripVertical className="size-4" />
+          </span>
         </header>
       </SwipeRow>
 
@@ -762,46 +775,132 @@ if (!registeredWith.has(defineNodeView)) {
 }
 
 /**
- * THE TOP BAR of the main content: the document's title on the far left, the
- * reel's running time beside it, and undo and redo on the far right.
+ * THE TOP BAR of the main content: where you are on the far left, the reel's
+ * running time beside it, and undo and redo on the far right.
  *
- * THE TITLE IS THE ROOT COLLECTION'S NAME, read from the document rather than
- * typed into the page, so the heading cannot disagree with the data it heads.
- * It names the document whatever the board is looking at — "go to" changes the
- * board, not which document this is; the trail below says where you are.
+ * WHERE YOU ARE IS A BREADCRUMB THAT STARTS AT THE TITLE. The document's name
+ * (the root collection's, read from the data so the heading cannot disagree
+ * with it) is the first crumb; going to a collection adds a crumb for every
+ * collection on the way down to it. Every crumb but the last is a real link —
+ * an `href` with the `?focus=` it goes to, so it can be opened in a new tab —
+ * and a plain click goes there in place, through the same `onGo` the rows'
+ * "go to" uses. The last crumb is where you are: the page's heading, not a link.
+ *
+ * The reel's running time stays about the WHOLE document wherever the board is
+ * looking, like undo and redo.
  */
-function TopNav({ rootId }: Readonly<{ rootId: ReturnType<typeof parseNodeId> }>) {
+function TopNav({
+  rootId,
+  shownRootId,
+  onGo,
+}: Readonly<{
+  rootId: NodeId;
+  shownRootId: NodeId;
+  onGo: (id: NodeId) => void;
+}>) {
+  const graph = useGraph();
+  const pathname = usePathname();
   const { canUndo, canRedo, undo, redo } = useHistory();
-  const root = useNode(rootId);
-  const title =
-    root !== undefined && !root.sealed && root.kind === "collection" ? root.data.name : "Untitled";
   // THE REEL IS WHAT PLAYS: active clips only, so this agrees with the strip.
   const total = useFold("activeSeconds", rootId);
+  const chain: NodeId[] = [];
+  for (let at: NodeId | null = shownRootId; at !== null; at = getParent(graph, at)) {
+    chain.unshift(at);
+  }
+  const nameOf = (id: NodeId): string => {
+    const node = getNode(graph, id);
+    return node !== undefined && !node.sealed && node.kind === "collection"
+      ? node.data.name
+      : "Untitled";
+  };
+  const hrefOf = (id: NodeId): string =>
+    id === rootId ? pathname : `${pathname}?focus=${encodeURIComponent(id)}`;
   const button =
     "flex items-center gap-1.5 rounded-md border border-zinc-800 px-2.5 py-1.5 text-xs text-zinc-300 transition-colors hover:border-zinc-700 hover:text-zinc-50 disabled:cursor-not-allowed disabled:border-zinc-900 disabled:text-zinc-700";
   return (
+    // ONE ROW ON A WIDE SCREEN; ON A PHONE THE TRAIL GETS A LINE OF ITS OWN
+    // (`basis-full` wraps what follows it), with the reel and undo/redo on the
+    // line below. Sharing one line, a two-deep trail was squeezed to nothing
+    // and the current crumb ran over "Reel runs".
     <header
       data-top-nav
-      className="mb-4 flex items-center justify-between gap-3"
+      className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 md:flex-nowrap"
     >
       {/* Centred rather than baseline-aligned, so the divider sits in the
           middle of the row between text of two different sizes. */}
-      <div className="flex min-w-0 items-center gap-3">
-        <h1 className="truncate text-lg font-semibold text-zinc-100">{title}</h1>
-        {/* A vertical rule between the title and what follows it, with room
-            to breathe: `mx-2` on top of the row's gap, 20px either side. */}
-        <span
-          aria-hidden="true"
-          data-top-nav-divider
-          className="mx-2 h-5 w-px shrink-0 bg-zinc-700"
-        />
-        {total ? (
-          <span className="shrink-0 text-xs">
-            Reel runs <Duration value={total.value} certainty={total.certainty} />
-          </span>
-        ) : null}
-      </div>
-      <div className="flex shrink-0 items-center gap-2">
+      <nav aria-label="Breadcrumb" className="min-w-0 max-md:basis-full">
+        <ol className="flex min-w-0 items-center gap-1.5 text-lg">
+          {chain.map((crumbId, index) => {
+            const current = index === chain.length - 1;
+            return (
+              <li
+                key={crumbId}
+                // The trail gives way from the FRONT when it runs out of room,
+                // and only then: the crumbs above shrink a thousand times faster
+                // than where you are, truncating first and each keeping a few
+                // letters rather than vanishing; where you are truncates only
+                // once they cannot give any more. (Not a percentage cap on the
+                // last crumb: a percentage of the trail's own width is circular,
+                // and cut "Toon Town" to two thirds with the page half empty.)
+                className={cn(
+                  "flex items-center gap-1.5",
+                  current ? "min-w-0 shrink" : "min-w-14 shrink-[1000]",
+                )}
+              >
+                {index === 0 ? null : (
+                  <ChevronRight className="size-4 shrink-0 text-zinc-600" aria-hidden="true" />
+                )}
+                {current ? (
+                  <h1
+                    aria-current="page"
+                    data-breadcrumb-current
+                    className="truncate font-semibold text-zinc-100"
+                  >
+                    {nameOf(crumbId)}
+                  </h1>
+                ) : (
+                  <Link
+                    href={hrefOf(crumbId)}
+                    data-breadcrumb-link
+                    onClick={(event) => {
+                      // A new tab or window is the browser's business; only a
+                      // plain click is taken over, so it also moves the strip.
+                      if (
+                        event.button !== 0 ||
+                        event.metaKey ||
+                        event.ctrlKey ||
+                        event.shiftKey ||
+                        event.altKey
+                      ) {
+                        return;
+                      }
+                      event.preventDefault();
+                      onGo(crumbId);
+                    }}
+                    className="truncate rounded px-0.5 font-semibold text-zinc-400 underline-offset-4 transition-colors hover:text-zinc-100 hover:underline focus-visible:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500"
+                  >
+                    {nameOf(crumbId)}
+                  </Link>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
+      {/* A vertical rule between where you are and what follows it, with
+          room to breathe: `mx-2` on top of the row's gap, 20px either side.
+          Not on a phone, where the two are on different lines. */}
+      <span
+        aria-hidden="true"
+        data-top-nav-divider
+        className="mx-2 h-5 w-px shrink-0 bg-zinc-700 max-md:hidden"
+      />
+      {total ? (
+        <span className="shrink-0 text-xs">
+          Reel runs <Duration value={total.value} certainty={total.certainty} />
+        </span>
+      ) : null}
+      <div className="ml-auto flex shrink-0 items-center gap-2">
         <button type="button" disabled={!canUndo} onClick={() => undo()} className={button}>
           <Undo2 className="size-3.5" /> Undo
         </button>
@@ -1065,10 +1164,10 @@ function BoardBody({
 
   return (
     <>
-      {/* The REEL's controls: undo, redo and the running time stay about the
-          whole document wherever the board is looking. */}
-      <TopNav rootId={topId} />
-      {focusedId === null ? null : <FocusTrail shownRootId={focusedId} onGo={focus} />}
+      {/* The breadcrumb to where the board is looking, then the REEL's
+          controls: undo, redo and the running time stay about the whole
+          document wherever that is. */}
+      <TopNav rootId={topId} shownRootId={shownRootId} onGo={focus} />
       {/* THE TREE FADES, AND STAYS MOUNTED, under an open preview: its rows keep
           whatever you had open, and the preview closes back into a card that
           is still where it was. `inert` takes it out of clicks and tabbing
@@ -1151,54 +1250,4 @@ function firstClipInStrip(graph: ReturnType<typeof useGraph>, rootId: NodeId): N
     if (inside(id) && switchedOffAt(graph, id) === null) return id;
   }
   return null;
-}
-
-/**
- * The way back up: every collection from the real root down to the one being
- * shown, each a link to go there. Only drawn while the board is focused.
- */
-function FocusTrail({
-  shownRootId,
-  onGo,
-}: Readonly<{ shownRootId: NodeId; onGo: (id: NodeId | null) => void }>) {
-  const graph = useGraph();
-  const chain: NodeId[] = [];
-  for (let at: NodeId | null = shownRootId; at !== null; at = getParent(graph, at)) {
-    chain.unshift(at);
-  }
-  return (
-    <nav aria-label="Breadcrumb" className="mb-3">
-      <ol className="flex flex-wrap items-center gap-1 text-sm">
-        {chain.map((crumbId, index) => {
-          const node = getNode(graph, crumbId);
-          const name =
-            node !== undefined && !node.sealed && node.kind === "collection"
-              ? node.data.name
-              : crumbId;
-          const current = index === chain.length - 1;
-          return (
-            <li key={crumbId} className="flex min-w-0 items-center gap-1">
-              {index === 0 ? null : (
-                <ChevronRight className="size-3.5 shrink-0 text-zinc-600" aria-hidden="true" />
-              )}
-              {current ? (
-                <span aria-current="page" className="truncate px-1 font-semibold text-zinc-100">
-                  {name}
-                </span>
-              ) : (
-                <button
-                  type="button"
-                  data-focus-crumb
-                  onClick={() => onGo(crumbId)}
-                  className="truncate rounded px-1 text-zinc-400 transition-colors hover:bg-zinc-800/60 hover:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500"
-                >
-                  {name}
-                </button>
-              )}
-            </li>
-          );
-        })}
-      </ol>
-    </nav>
-  );
 }
