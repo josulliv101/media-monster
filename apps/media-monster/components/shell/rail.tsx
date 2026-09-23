@@ -393,7 +393,7 @@ export function Rail({
           the lockup is ~150px of a 360px bar — and it is the one piece of the
           rail worth keeping in sight, so the app still looks like itself with
           the rail away. */}
-      <header className="fixed inset-x-0 top-0 z-40 flex h-14 items-center gap-2 border-b border-zinc-800 bg-zinc-950/90 px-3 backdrop-blur-md md:hidden">
+      <header data-mobile-top-bar className="fixed inset-x-0 top-0 z-40 flex h-14 items-center gap-2 border-b border-zinc-800 bg-zinc-950/90 px-3 backdrop-blur-md md:hidden">
         <button
           type="button"
           aria-label="Open menu"
