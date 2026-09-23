@@ -1,6 +1,6 @@
 "use client";
 
-import { useSyncExternalStore, type RefObject } from "react";
+import { useState, useSyncExternalStore, type RefObject } from "react";
 import { X } from "lucide-react";
 import type { FilmStripSize } from "@storyboard/ui/film-strip";
 
@@ -21,6 +21,7 @@ import {
   subscribeHoverPlay,
 } from "@/components/settings/hover-play-store";
 import type { HoverPlay } from "@/components/settings/hover-play-preference";
+import { BOARD_RESET_EVENT, clearSavedBoard } from "@/components/board/board-save";
 import { cn } from "@/lib/utils";
 
 /** One setting's options: a value, what to call it, and what it does. */
@@ -161,8 +162,63 @@ function SettingsPanel({ onDone }: Readonly<{ onDone: () => void }>) {
           chosen={size}
           onChoose={commitFilmStripSize}
         />
+        <ResetBoard onDone={onDone} />
       </div>
     </div>
+  );
+}
+
+/**
+ * START OVER: forget this browser's saved board and go back to the sample.
+ *
+ * TWO STEPS, because it cannot be undone — the saved board is the only copy,
+ * and Undo does not reach past a reset. The first press only asks.
+ */
+function ResetBoard({ onDone }: Readonly<{ onDone: () => void }>) {
+  const [asking, setAsking] = useState(false);
+  return (
+    <section aria-labelledby="reset-board-title" className="grid gap-2">
+      <h3 id="reset-board-title" className="text-sm font-medium text-zinc-200">
+        Board
+      </h3>
+      <p className="text-xs text-zinc-500">
+        Your changes are saved in this browser. Resetting goes back to the sample board.
+      </p>
+      {asking ? (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-xs text-red-300">This can’t be undone.</span>
+          <button
+            type="button"
+            data-reset-board-confirm
+            onClick={() => {
+              clearSavedBoard();
+              window.dispatchEvent(new Event(BOARD_RESET_EVENT));
+              setAsking(false);
+              onDone();
+            }}
+            className="rounded-md border border-red-500/60 bg-red-500/10 px-3 py-1.5 text-xs text-red-200 transition-colors hover:bg-red-500/20"
+          >
+            Reset board
+          </button>
+          <button
+            type="button"
+            onClick={() => setAsking(false)}
+            className="rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:border-zinc-500"
+          >
+            Keep my board
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          data-reset-board
+          onClick={() => setAsking(true)}
+          className="justify-self-start rounded-md border border-zinc-700 px-3 py-1.5 text-xs text-zinc-300 transition-colors hover:border-zinc-500 hover:text-zinc-100"
+        >
+          Reset board…
+        </button>
+      )}
+    </section>
   );
 }
 

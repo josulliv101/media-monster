@@ -57,6 +57,13 @@ import { SwipeGroup, SwipeRow } from "./swipe-row";
 import { BoardDragProvider, DropPlaceholder, useBoardDrag } from "./board-drag";
 import { readCollection, restoreSwitchedOff } from "./read-collection";
 import {
+  BOARD_RESET_EVENT,
+  clearSavedBoard,
+  readSavedBoard,
+  writeSavedBoard,
+  type SavedBoard,
+} from "./board-save";
+import {
   BoardPreview,
   cardPicture,
   rectOf,
@@ -99,12 +106,10 @@ import { cn } from "@/lib/utils";
  * actually holding a document, folding it, and mutating it through the one
  * command path.
  *
- * WHAT IT DELIBERATELY IS NOT, so the gap is a decision rather than an oversight:
- * there is no drag and drop, no persistence and no routing. The document is a
- * fixture and every change is lost on reload. Those are the next three pieces
- * and each is larger than this one; what this proves is that the engine runs
- * here, with this app's own kinds, and that its uncertainty machinery survives
- * the trip to the screen.
+ * WHERE IT STANDS: rows and clips drag anywhere in the tree (`board-drag.tsx`),
+ * "go to" puts a collection in the URL, and edits are saved in this browser
+ * (`board-save.ts`) — the sample document is only the starting point. Not yet:
+ * a server copy, so a board lives on one device and one browser.
  *
  * BOTH VIEWS ARE REGISTERED IN THIS FILE, at module scope, and that is not
  * laziness. `defineNodeView` mutates a registry and returns nothing, so
@@ -1193,10 +1198,65 @@ function TopNav({
   );
 }
 
+/** A store the board runs on, and where it came from. */
+type BuiltBoard = Readonly<{
+  store: ReturnType<typeof engine.createStore>;
+  sealedCount: number;
+  builtBy: typeof engine;
+  /** Changes on every rebuild, so the provider below remounts on a new store. */
+  id: number;
+  /** `"sample"` until this browser's save has been looked at; the fixture is
+   *  drawn meanwhile only when no save is expected (see `hasSavedBoard`). */
+  from: "sample" | "saved" | "sample-provisional";
+  /** Why saving is paused, when it is: the saved copy could not be loaded, and
+   *  writing over it would lose it for good. */
+  savingBlockedBy: string | null;
+}>;
+
+let builds = 0;
+
+function fromSample(inactiveRows: readonly string[], provisional: boolean): BuiltBoard {
+  const { graph, report } = loadFixtureGraph();
+  const store = engine.createStore(graph);
+  restoreSwitchedOff(store, inactiveRows);
+  builds += 1;
+  return {
+    store,
+    sealedCount: report.sealed.length,
+    builtBy: engine,
+    id: builds,
+    from: provisional ? "sample-provisional" : "sample",
+    savingBlockedBy: null,
+  };
+}
+
+function fromSaved(saved: SavedBoard, inactiveRows: readonly string[]): BuiltBoard {
+  if (saved.kind === "ok") {
+    builds += 1;
+    // The save carries every row's Active switch itself; the cookie is not
+    // applied over it.
+    return {
+      store: engine.createStore(saved.graph),
+      sealedCount: saved.sealedCount,
+      builtBy: engine,
+      id: builds,
+      from: "saved",
+      savingBlockedBy: null,
+    };
+  }
+  const sample = fromSample(inactiveRows, false);
+  return saved.kind === "broken" ? { ...sample, savingBlockedBy: saved.reason } : sample;
+}
+
+/** How long after the last edit the board is written, so a burst of edits
+ *  (a drag's worth of undo and redo) is one write. */
+const SAVE_DELAY_MS = 400;
+
 export function Board({
   initialFilmStripSize = "default",
   initialBoardLayout = "grid",
   initialInactiveRows = [],
+  hasSavedBoard = false,
 }: Readonly<{
   /** What the server rendered the strip at, from the cookie. The settings
    *  dialog changes it live; this only makes the first paint agree. */
@@ -1207,6 +1267,9 @@ export function Board({
    *  Applied to the fixture as it is built, on the server and the client alike,
    *  so both render the same rows off. */
   initialInactiveRows?: readonly string[];
+  /** This browser has a saved board (the `mm_board_saved` cookie): draw a
+   *  loading state until it is read, rather than the sample and then a swap. */
+  hasSavedBoard?: boolean;
 }> = {}) {
   const filmStripSize = useSyncExternalStore(
     subscribeFilmStripSize,
@@ -1218,28 +1281,128 @@ export function Board({
     readBoardLayout,
     () => initialBoardLayout,
   );
-  // ONE STORE FOR THE LIFE OF THE MOUNT. Built in a lazy initializer rather than
-  // at module scope so React Strict Mode's double render does not build two, and
-  // so a future document id can key it. `loadFixtureGraph` throws on a fixture
-  // that does not parse, which is what should happen — it ships with the app.
-  const buildStore = () => {
-    const { graph, report } = loadFixtureGraph();
-    const store = engine.createStore(graph);
-    restoreSwitchedOff(store, initialInactiveRows);
-    return { store, sealed: report.sealed, builtBy: engine };
-  };
-  const [built, setBuilt] = useState(buildStore);
+  // THE SAVED BOARD, read once per mount. Through `useSyncExternalStore` so the
+  // server and the hydrating client both see "not read yet" (storage is the
+  // browser's), and the client reads it on the render straight after. Cached
+  // per mount: the save changes with every edit, and the board must not
+  // rebuild itself from its own writes.
+  const [mount] = useState(() => ({ read: null as SavedBoard | null }));
+  const saved = useSyncExternalStore(
+    noSubscription,
+    () => (mount.read ??= readSavedBoard()),
+    () => null,
+  );
+
+  // ONE STORE AT A TIME, built from the save when there is one. With no save
+  // expected the sample is drawn at once, as before, and swapped only if a save
+  // turns up anyway (the cookie was cleared but storage was not). With one
+  // expected, nothing is drawn until it is read.
+  const [built, setBuilt] = useState<BuiltBoard | null>(() =>
+    hasSavedBoard ? null : fromSample(initialInactiveRows, true),
+  );
+  if (saved !== null && (built === null || built.from === "sample-provisional")) {
+    setBuilt(
+      saved.kind === "ok" || built === null
+        ? fromSaved(saved, initialInactiveRows)
+        : saved.kind === "broken"
+          ? { ...built, from: "sample", savingBlockedBy: saved.reason }
+          : { ...built, from: "sample" },
+    );
+  }
   // A NEW ENGINE MEANS A NEW STORE. Only hot reload makes one: an edit to
   // `engine.ts` (or the node types) re-runs it and the bindings, while Fast
   // Refresh keeps this state, so the board held a store from the old engine
   // and the bindings refused it ("built by a different engine"). Rebuilt
-  // during render, React's pattern for state that follows a changed input.
-  // The fixture reloads, so unsaved edits go with it, as they would on reload.
-  if (built.builtBy !== engine) setBuilt(buildStore());
-  const { store, sealed } = built;
+  // during render from what is saved now.
+  if (built !== null && built.builtBy !== engine) {
+    setBuilt(fromSaved(readSavedBoard(), initialInactiveRows));
+  }
 
+  // SAVED AFTER EVERY EDIT, undo and redo included (all three come through the
+  // change feed; loads and restored switches do not, by design). Batched a
+  // moment, and flushed when the page is hidden so the last edit before
+  // leaving is not lost. A refused save (the engine found the board would not
+  // load back) writes NOTHING, keeps the last good save, and says so.
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const store = built?.store ?? null;
+  const savingBlockedBy = built?.savingBlockedBy ?? null;
+  useEffect(() => {
+    if (store === null || savingBlockedBy !== null) return;
+    let timer: number | null = null;
+    const flush = () => {
+      if (timer === null) return;
+      window.clearTimeout(timer);
+      timer = null;
+      setSaveError(writeSavedBoard(store.getGraph()));
+    };
+    const unsubscribe = store.subscribeToChanges(() => {
+      if (timer !== null) window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = null;
+        setSaveError(writeSavedBoard(store.getGraph()));
+      }, SAVE_DELAY_MS);
+    });
+    const onHide = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      flush();
+      unsubscribe();
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, [store, savingBlockedBy]);
+
+  // RESET FROM SETTINGS: the save is already cleared there; the board goes
+  // back to the sample, every row on.
+  useEffect(() => {
+    const onReset = () => {
+      setSaveError(null);
+      setBuilt(fromSample([], false));
+    };
+    window.addEventListener(BOARD_RESET_EVENT, onReset);
+    return () => window.removeEventListener(BOARD_RESET_EVENT, onReset);
+  }, []);
+
+  if (built === null) {
+    return (
+      <div
+        role="status"
+        aria-label="Loading your board"
+        data-board-loading
+        className="flex flex-1 flex-col gap-3"
+      >
+        <div className="h-8 w-56 animate-pulse rounded-md bg-zinc-900 motion-reduce:animate-none" />
+        {[0, 1, 2, 3].map((row) => (
+          <div
+            key={row}
+            className="h-[4.5rem] animate-pulse rounded-xl border border-zinc-900 bg-zinc-950 motion-reduce:animate-none"
+          />
+        ))}
+      </div>
+    );
+  }
+  const sealed = { length: built.sealedCount };
   return (
-    <Provider store={store}>
+    <Provider key={built.id} store={built.store}>
+      {built.savingBlockedBy !== null ? (
+        <SaveBlockedNotice
+          reason={built.savingBlockedBy}
+          onStartOver={() => {
+            clearSavedBoard();
+            setBuilt(fromSample([], false));
+          }}
+        />
+      ) : saveError !== null ? (
+        <p
+          role="alert"
+          className="mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300"
+        >
+          Your last change could not be saved ({saveError}). The previous save is kept.
+        </p>
+      ) : null}
       {/* SEALING IS A SUCCESS PATH, so `ok: true` alone would have said nothing.
           A node whose kind this app does not know keeps its bytes and stays
           movable, and the board simply renders fewer cards than the document
@@ -1262,6 +1425,38 @@ export function Board({
  * the live graph (a folder that was just read in is a valid target, and one that
  * was deleted is not), and only a component inside the Provider can subscribe.
  */
+const noSubscription = () => () => undefined;
+
+/**
+ * THE SAVED BOARD COULD NOT BE LOADED. The sample is shown instead, and saving
+ * is paused: an edit now would write the sample over the only copy of the
+ * user's board. Starting over is their call, made here.
+ */
+function SaveBlockedNotice({
+  reason,
+  onStartOver,
+}: Readonly<{ reason: string; onStartOver: () => void }>) {
+  return (
+    <div
+      role="alert"
+      data-save-blocked
+      className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200"
+    >
+      <span className="min-w-0 flex-1">
+        Your saved board couldn’t be loaded ({reason}). It’s kept as it is, and changes
+        won’t be saved until you start over. You’re looking at the sample.
+      </span>
+      <button
+        type="button"
+        onClick={onStartOver}
+        className="shrink-0 rounded-md border border-amber-400/50 px-2 py-1 text-amber-100 transition-colors hover:border-amber-300 hover:bg-amber-500/10"
+      >
+        Start over from the sample
+      </button>
+    </div>
+  );
+}
+
 function BoardBody({
   boardLayout,
   filmStripSize,
