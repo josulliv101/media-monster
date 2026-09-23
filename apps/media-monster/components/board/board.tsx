@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, use, useId, useState, useSyncExternalStore } from "react";
+import { createContext, use, useEffect, useId, useState, useSyncExternalStore } from "react";
 import {
   documentOrder,
   getNode,
@@ -45,6 +45,11 @@ import {
 import type { BoardLayout } from "@/components/settings/board-layout-preference";
 import { imageUrl, videoFrameUrl } from "@/lib/media/cloudinary";
 import { switchedOffAt } from "@/lib/engine/branch-activity";
+import {
+  encodeInactiveRows,
+  inactiveRowsFromCookies,
+  writeInactiveRows,
+} from "@/components/settings/inactive-rows-preference";
 import type { ClipMedia, NodeTypes } from "@/lib/engine/node-types";
 import type { NodeViewProps } from "@josulliv101/nested-collections/react";
 import { cn } from "@/lib/utils";
@@ -195,6 +200,46 @@ const BoardFocusContext = createContext<BoardFocus>({
   shownRootId: null,
   focus: () => undefined,
 });
+
+/**
+ * SWITCHED-OFF ROWS, KEPT BETWEEN LOADS (see `inactive-rows-preference.ts`).
+ *
+ * The document is rebuilt from the fixture on every load, so the rows the
+ * cookie names are switched off again by a NON-UNDOABLE write: restoring what
+ * you left is not an edit you made this session, and Undo must not offer to
+ * take it back.
+ *
+ * Only ids that are in the graph NOW and still on are written. The rest are
+ * not lost: an id inside a folder not read yet (B-roll's Locations) stays in
+ * the cookie, and is applied here again when that folder is opened.
+ */
+type BoardStore = Pick<ReturnType<typeof engine.createStore>, "getGraph" | "applyNonUndoableWrite">;
+
+function restoreSwitchedOff(store: BoardStore, ids: readonly string[]): void {
+  const graph = store.getGraph();
+  const edits: { nodeId: NodeId; kind: "collection"; edit: { active: false } }[] = [];
+  for (const raw of ids) {
+    const parsed = tryParseNodeId(raw);
+    if (!parsed.ok) continue;
+    const node = getNode(graph, parsed.value);
+    if (node !== undefined && !node.sealed && node.kind === "collection" && node.data.active) {
+      edits.push({ nodeId: parsed.value, kind: "collection", edit: { active: false } });
+    }
+  }
+  if (edits.length > 0) store.applyNonUndoableWrite(edits);
+}
+
+/** Every collection switched off in `graph`, in document order. */
+function switchedOffIds(graph: ReturnType<typeof useGraph>): string[] {
+  const ids: string[] = [];
+  for (const id of documentOrder(graph)) {
+    const node = getNode(graph, id);
+    if (node !== undefined && !node.sealed && node.kind === "collection" && !node.data.active) {
+      ids.push(id);
+    }
+  }
+  return ids;
+}
 
 /**
  * The collection named in the URL, if it is one this board can show.
@@ -393,6 +438,10 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
     } else {
       const loaded = store.load(id, doc);
       if (!loaded.ok) setRejection(`${loaded.error.code}: ${loaded.error.message}`);
+      // Rows switched off in an earlier session that live in THIS folder only
+      // exist now, so their saved state is applied now. Same synchronous block
+      // as the load, so nothing ever records them as on.
+      else restoreSwitchedOff(store, inactiveRowsFromCookies(document.cookie));
     }
     setReading(false);
   };
@@ -691,12 +740,17 @@ function Toolbar({ rootId }: Readonly<{ rootId: ReturnType<typeof parseNodeId> }
 export function Board({
   initialFilmStripSize = "default",
   initialBoardLayout = "grid",
+  initialInactiveRows = [],
 }: Readonly<{
   /** What the server rendered the strip at, from the cookie. The settings
    *  dialog changes it live; this only makes the first paint agree. */
   initialFilmStripSize?: FilmStripSize;
   /** The same, for how the board lays clips out. */
   initialBoardLayout?: BoardLayout;
+  /** Collection ids switched off when the page was last left, from the cookie.
+   *  Applied to the fixture as it is built, on the server and the client alike,
+   *  so both render the same rows off. */
+  initialInactiveRows?: readonly string[];
 }> = {}) {
   const filmStripSize = useSyncExternalStore(
     subscribeFilmStripSize,
@@ -714,7 +768,9 @@ export function Board({
   // that does not parse, which is what should happen — it ships with the app.
   const buildStore = () => {
     const { graph, report } = loadFixtureGraph();
-    return { store: engine.createStore(graph), sealed: report.sealed, builtBy: engine };
+    const store = engine.createStore(graph);
+    restoreSwitchedOff(store, initialInactiveRows);
+    return { store, sealed: report.sealed, builtBy: engine };
   };
   const [built, setBuilt] = useState(buildStore);
   // A NEW ENGINE MEANS A NEW STORE. Only hot reload makes one: an edit to
@@ -759,6 +815,21 @@ function BoardBody({
   const pathname = usePathname();
   const params = useSearchParams();
   const topId = parseNodeId(FIXTURE_ROOT_ID);
+
+  // THE COOKIE FOLLOWS THE BOARD. Recomputed from the graph after every change,
+  // so a switch flipped, undone or redone are all the same event here, and the
+  // cookie cannot drift from what is on screen. Ids for rows not in the graph
+  // at all (inside a folder not read yet) are carried over, not dropped.
+  // Written only when the set actually changed.
+  useEffect(() => {
+    const saved = inactiveRowsFromCookies(document.cookie);
+    const unread = saved.filter((raw) => {
+      const parsed = tryParseNodeId(raw);
+      return parsed.ok && getNode(graph, parsed.value) === undefined;
+    });
+    const next = [...switchedOffIds(graph), ...unread];
+    if (encodeInactiveRows(next) !== encodeInactiveRows(saved)) writeInactiveRows(next);
+  }, [graph]);
 
   // IN THE URL, so the browser's Back button goes back up, and a link to a
   // collection opens on it. `?focus=` naming the real root, or nothing valid,
