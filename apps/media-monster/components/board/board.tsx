@@ -737,7 +737,7 @@ function TopNav({ rootId }: Readonly<{ rootId: ReturnType<typeof parseNodeId> }>
   return (
     <header
       data-top-nav
-      className="mb-4 flex items-center justify-between gap-3 border-b border-zinc-800 pb-3"
+      className="mb-4 flex items-center justify-between gap-3"
     >
       {/* Centred rather than baseline-aligned, so the divider sits in the
           middle of the row between text of two different sizes. */}
