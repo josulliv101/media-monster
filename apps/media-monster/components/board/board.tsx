@@ -415,6 +415,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
     // the right as well, which staggered them. The depth still reads from the
     // left, where the names step in. The row shown as the root keeps its box.
     <section
+      data-branch-in-cut={on}
       className={cn(
         "col-span-full border border-zinc-800 bg-zinc-950/60 p-2 md:p-3",
         isRoot ? "rounded-xl" : "rounded-l-xl border-r-0 pr-0 md:pr-0",
@@ -439,33 +440,35 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
             className="group flex w-full items-baseline justify-between gap-3 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-zinc-800/60 focus-visible:bg-zinc-800/60 focus-visible:outline-2 focus-visible:outline-sky-500"
           >
             <span className="flex min-w-0 items-center gap-1.5">
-              {/* IN THE STRIP OR NOT, AT A GLANCE, and FIRST in the row: a film icon
-                  while this branch plays, the collections icon when it does not — a row holding
-                  material rather than part of the cut. Layers, because it is
-                  the icon this project already means "collection" by: the film
-                  strip's section labels and the old app's collection cards. A little more room after
-                  it (mr-1 on top of the gap) than between the name and the
-                  triangle, so the icon reads as a marker rather than a letter. The name and
-                  the triangle are NOT dimmed: the row is still a row you open
-                  and read. The switch carries the state for assistive tech, so
-                  the icon is decorative. */}
-              {on ? (
-                <Film
-                  data-collection-in-cut
-                  aria-hidden="true"
-                  className="mr-1 size-3.5 shrink-0 text-sky-400"
-                />
-              ) : (
-                <Layers
-                  data-collection-out-of-cut
-                  aria-hidden="true"
-                  className="mr-1 size-3.5 shrink-0 text-zinc-300"
-                />
-              )}
-              {/* BLUE WHILE IT PLAYS: the name takes the film icon's colour, the
-                  same family as the switch's "on" track, so a row in the cut
-                  reads at a glance. A switched-off row keeps the ordinary ink. */}
-              <span className={cn("truncate", on ? "text-sky-400" : null)}>{data.name}</span>
+              {/* IN THE STRIP OR NOT, AT A GLANCE, first in the row. One slot,
+                  the same size in both states so the names line up down the
+                  board: a white film icon on a small solid blue chip while this
+                  branch plays — the switch's "on" blue, carried by a shape
+                  rather than by coloured text, which read poorly — and the
+                  collections icon, unfilled, when it does not. Layers is the
+                  icon this project already means "collection" by (the film
+                  strip's section labels, the old app's collection cards).
+                  `mr-1` on top of the gap sets it apart from the name. Nothing
+                  here dims: the row is still a row you open and read. The
+                  switch carries the state for assistive tech, so this is
+                  decorative. */}
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "mr-1 flex size-5 shrink-0 items-center justify-center rounded-md",
+                  on ? "bg-sky-500" : null,
+                )}
+              >
+                {on ? (
+                  // Turned a quarter so the film runs SIDEWAYS, like the strip at the
+                  // bottom of the board: sprocket holes top and bottom, not left
+                  // and right.
+                  <Film data-collection-in-cut className="size-3 rotate-90 text-white" />
+                ) : (
+                  <Layers data-collection-out-of-cut className="size-3.5 text-zinc-300" />
+                )}
+              </span>
+              <span className="truncate">{data.name}</span>
               {/* AFTER THE NAME. Points right when closed and down when open;
                   brightens with the bar on hover and focus. */}
               <svg
