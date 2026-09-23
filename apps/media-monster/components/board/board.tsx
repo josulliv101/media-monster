@@ -823,14 +823,16 @@ function TopNav({
             return (
               <li
                 key={crumbId}
-                // The trail gives way from the FRONT when it runs out of room:
-                // the crumbs above shrink and truncate, each keeping a few
-                // letters rather than vanishing, while where you are keeps its
-                // whole name — up to two thirds of the line, past which even it
-                // truncates rather than push the trail off the screen.
+                // The trail gives way from the FRONT when it runs out of room,
+                // and only then: the crumbs above shrink a thousand times faster
+                // than where you are, truncating first and each keeping a few
+                // letters rather than vanishing; where you are truncates only
+                // once they cannot give any more. (Not a percentage cap on the
+                // last crumb: a percentage of the trail's own width is circular,
+                // and cut "Toon Town" to two thirds with the page half empty.)
                 className={cn(
                   "flex items-center gap-1.5",
-                  current ? "min-w-0 shrink-0 max-w-2/3" : "min-w-14 shrink",
+                  current ? "min-w-0 shrink" : "min-w-14 shrink-[1000]",
                 )}
               >
                 {index === 0 ? null : (
