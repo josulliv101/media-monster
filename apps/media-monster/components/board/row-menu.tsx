@@ -1,14 +1,19 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { EllipsisVertical } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { RowMenuItems, type RowAction } from "./row-actions";
 
 /**
  * A ROW'S ⋮ MENU: a button at the far right of a collection's row that opens a
- * small menu of what can be done to that row. The items are the caller's
- * (`children`); each one should be a `role="menuitem…"` button.
+ * small menu of what can be done to that row: the row's `RowAction` list (see
+ * `row-actions.tsx`), which the phone's swipe tray draws too.
+ *
+ * NOT SHOWN ON A PHONE: there the same actions are behind a left swipe on the
+ * row (`swipe-row.tsx`). The button is only visually hidden, so a keyboard or
+ * a screen reader still reaches the menu, and it shows itself when focused.
  *
  * THE BROWSER'S OWN POPOVER, not a positioned div. `popover="auto"` puts the
  * menu in the top layer, so no row's rounded, clipped box can cut it off and no
@@ -22,7 +27,10 @@ import { cn } from "@/lib/utils";
  * run off the bottom of the window. It closes when the page scrolls, rather
  * than being left hanging where the button used to be.
  */
-export function RowMenu({ label, children }: Readonly<{ label: string; children: ReactNode }>) {
+export function RowMenu({
+  label,
+  actions,
+}: Readonly<{ label: string; actions: readonly RowAction[] }>) {
   const menuId = useId();
   const buttonRef = useRef<HTMLButtonElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -56,7 +64,7 @@ export function RowMenu({ label, children }: Readonly<{ label: string; children:
         title="More"
         data-row-menu-button
         className={cn(
-          "flex shrink-0 items-center self-stretch rounded-lg px-1.5 text-zinc-500 transition-colors hover:bg-zinc-800/60 hover:text-zinc-100 focus-visible:bg-zinc-800/60 focus-visible:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500",
+          "flex shrink-0 items-center self-stretch rounded-lg px-1.5 max-md:sr-only max-md:focus-visible:not-sr-only text-zinc-500 transition-colors hover:bg-zinc-800/60 hover:text-zinc-100 focus-visible:bg-zinc-800/60 focus-visible:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500",
           open && "bg-zinc-800/60 text-zinc-100",
         )}
       >
@@ -108,7 +116,7 @@ export function RowMenu({ label, children }: Readonly<{ label: string; children:
         style={{ position: "fixed", inset: "auto", margin: 0, translate: "-100% 0" }}
         className="min-w-56 rounded-xl border border-zinc-800 bg-zinc-900 p-1 text-zinc-200 shadow-2xl shadow-black/60"
       >
-        {children}
+        <RowMenuItems actions={actions} />
       </div>
     </>
   );
