@@ -35,7 +35,11 @@ export default async function Home() {
     // cards wants every column the window can give it.
     // No bottom padding: the film strip is pinned to the bottom of the
     // viewport, and padding under it would make it rise when the page ends.
-    <div className="pt-10">
+    // A COLUMN THAT FILLS THE SCREEN, so the board's film strip can sit at the
+    // bottom of the viewport even when the board above it is short (every
+    // collection closed). `main` is the column above this; the board ends in a
+    // spacer that takes up whatever height is left.
+    <div className="flex flex-1 flex-col pt-10">
       <h1 className="mb-1 text-lg font-semibold text-zinc-100">Toon Town</h1>
       <p className="mb-6 text-sm text-zinc-500">
         A fixture document, running on the nested-collections engine. Changes are

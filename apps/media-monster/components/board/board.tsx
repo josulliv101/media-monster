@@ -794,7 +794,14 @@ function BoardBody({
           inside `main`'s padding) with no offsets to keep in step, and it
           settles into its own spot at the end of the board. The background is
           the page's, so cards scrolling under it do not show through. */}
-      <div className="sticky bottom-0 z-40 mt-6 bg-zinc-950 pt-3 pb-4 max-md:-mx-2">
+      {/* THE SPACER THAT PUTS THE STRIP AT THE BOTTOM. It grows to fill the
+          screen when the board is short, so the strip sits on the bottom edge
+          instead of right under the last row; with a tall board it collapses
+          to its 24px minimum, the gap the strip used to keep as a margin, and
+          `sticky` does the pinning while the page scrolls. The page and `main`
+          above are flex columns for this; see `app/page.tsx`. */}
+      <div aria-hidden="true" className="min-h-6 flex-1" />
+      <div className="sticky bottom-0 z-40 bg-zinc-950 pt-3 pb-4 max-md:-mx-2">
         <BoardFilmStrip size={filmStripSize} />
       </div>
     </>
