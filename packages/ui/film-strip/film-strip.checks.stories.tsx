@@ -48,10 +48,17 @@ export const PlaybackAdvances: Story = {
     // PROGRESS, not merely a changed readout. The broken clock recomputed
     // "start + one frame" every frame, so a single slow first frame could move
     // the readout a few frames and a bare "it changed" check passed on the bug.
-    // A running clock covers most of a second in one second; the broken one
-    // never gets past one frame's worth.
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    expect(seconds()).toBeGreaterThan(0.5);
+    //
+    // WAITED FOR, NOT RACED. This slept one real second and required 0.5s of
+    // clock, and a loaded CI runner came in at 0.42 and then exactly 0.5 on
+    // unchanged strip code, turning main red. The broken clock NEVER gets past
+    // one frame's worth (1/24s), however long it runs; a working one passes six
+    // frames as soon as it has run long enough, however slow the machine. So
+    // the bar is six frames and the deadline is generous: a slow runner waits
+    // longer, and only a stuck clock fails. Measured with the clock stuck the
+    // old way (every frame recomputed from the start): it waits the full five
+    // seconds and fails.
+    await waitFor(() => expect(seconds()).toBeGreaterThan(6 / 24), { timeout: 5000 });
   },
 };
 

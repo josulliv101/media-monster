@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, use, useId, useState, useSyncExternalStore } from "react";
+import { createContext, use, useEffect, useId, useState, useSyncExternalStore } from "react";
 import {
   documentOrder,
   getNode,
@@ -45,6 +45,11 @@ import {
 import type { BoardLayout } from "@/components/settings/board-layout-preference";
 import { imageUrl, videoFrameUrl } from "@/lib/media/cloudinary";
 import { switchedOffAt } from "@/lib/engine/branch-activity";
+import {
+  encodeInactiveRows,
+  inactiveRowsFromCookies,
+  writeInactiveRows,
+} from "@/components/settings/inactive-rows-preference";
 import type { ClipMedia, NodeTypes } from "@/lib/engine/node-types";
 import type { NodeViewProps } from "@josulliv101/nested-collections/react";
 import { cn } from "@/lib/utils";
@@ -197,6 +202,46 @@ const BoardFocusContext = createContext<BoardFocus>({
 });
 
 /**
+ * SWITCHED-OFF ROWS, KEPT BETWEEN LOADS (see `inactive-rows-preference.ts`).
+ *
+ * The document is rebuilt from the fixture on every load, so the rows the
+ * cookie names are switched off again by a NON-UNDOABLE write: restoring what
+ * you left is not an edit you made this session, and Undo must not offer to
+ * take it back.
+ *
+ * Only ids that are in the graph NOW and still on are written. The rest are
+ * not lost: an id inside a folder not read yet (B-roll's Locations) stays in
+ * the cookie, and is applied here again when that folder is opened.
+ */
+type BoardStore = Pick<ReturnType<typeof engine.createStore>, "getGraph" | "applyNonUndoableWrite">;
+
+function restoreSwitchedOff(store: BoardStore, ids: readonly string[]): void {
+  const graph = store.getGraph();
+  const edits: { nodeId: NodeId; kind: "collection"; edit: { active: false } }[] = [];
+  for (const raw of ids) {
+    const parsed = tryParseNodeId(raw);
+    if (!parsed.ok) continue;
+    const node = getNode(graph, parsed.value);
+    if (node !== undefined && !node.sealed && node.kind === "collection" && node.data.active) {
+      edits.push({ nodeId: parsed.value, kind: "collection", edit: { active: false } });
+    }
+  }
+  if (edits.length > 0) store.applyNonUndoableWrite(edits);
+}
+
+/** Every collection switched off in `graph`, in document order. */
+function switchedOffIds(graph: ReturnType<typeof useGraph>): string[] {
+  const ids: string[] = [];
+  for (const id of documentOrder(graph)) {
+    const node = getNode(graph, id);
+    if (node !== undefined && !node.sealed && node.kind === "collection" && !node.data.active) {
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+/**
  * The collection named in the URL, if it is one this board can show.
  *
  * NOT TRUSTED: it came from the address bar. An id that does not parse, does
@@ -337,6 +382,18 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
     });
   };
   const isRoot = id === (shownRootId ?? graph.rootIds[0]);
+  // THE REAL ROOT IS NOT DRAWN AS A BOX. It is the board itself — the page's
+  // heading names it and the toolbar carries its running time — so its
+  // children are the top level. A collection "gone to" keeps its box: it is the
+  // thing you went to, and the trail names it.
+  //
+  // Asked of the GRAPH, not of `shownRootId` being null: the board always hands
+  // down the id it shows, the real root included, so "nothing gone to" is "the
+  // shown root is a real root".
+  const showingRealRoot = shownRootId === null || graph.rootIds.includes(shownRootId);
+  const bare = isRoot && showingRealRoot;
+  const parentId = getParent(graph, id);
+  const isTopLevel = showingRealRoot && parentId !== null && graph.rootIds.includes(parentId);
   const [collapsed, setCollapsed] = useState(!isRoot);
   const bodyId = useId();
 
@@ -381,6 +438,10 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
     } else {
       const loaded = store.load(id, doc);
       if (!loaded.ok) setRejection(`${loaded.error.code}: ${loaded.error.message}`);
+      // Rows switched off in an earlier session that live in THIS folder only
+      // exist now, so their saved state is applied now. Same synchronous block
+      // as the load, so nothing ever records them as on.
+      else restoreSwitchedOff(store, inactiveRowsFromCookies(document.cookie));
     }
     setReading(false);
   };
@@ -400,6 +461,88 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
     setRejection(result.ok ? null : `${result.error.code}: ${result.error.message}`);
   };
 
+  // What a collection holds, drawn inside its box — or, for the real root,
+  // drawn as the board itself.
+  const contents = (
+    <>
+      {unread ? (
+        <p className="rounded-lg border border-dashed border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-300/80">
+          {summarized
+            ? "Not read yet. Its stored summary is answering for it."
+            : "Not read yet, and nothing is stored about what it holds."}{" "}
+          <button
+            type="button"
+            onClick={() => void open()}
+            disabled={reading}
+            className="ml-1 rounded-md border border-amber-400/40 px-2 py-0.5 text-amber-200 transition-colors hover:border-amber-300 hover:text-amber-100 disabled:cursor-wait disabled:opacity-60"
+          >
+            {reading ? "Reading…" : "Open"}
+          </button>
+        </p>
+      ) : loadState === "missing" ? (
+        <p className="px-1 py-2 text-xs text-zinc-500">Gone from storage.</p>
+      ) : children.length === 0 ? (
+        <p className="px-1 py-2 text-xs text-zinc-600">Empty.</p>
+      ) : layout === "row" ? (
+        // ONE ROW THAT RUNS OFF THE EDGE, scrolled sideways, the way the
+        // film strip reads the reel. A collection's height then stops
+        // depending on how much it holds, which is what makes a document
+        // this deep scannable by scrolling the page.
+        //
+        // NESTED COLLECTIONS STAY STACKED, below the clips: a folder is
+        // not a card, and a horizontal scroller full of folders hides the
+        // thing you opened the folder to see. So the children are split
+        // by kind here — the only place that distinction matters.
+        <div className="grid gap-2">
+          {clipIds.length === 0 ? null : (
+            <div
+              data-board-row
+              className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:thin] md:gap-3"
+            >
+              {clipIds.map((childId) => (
+                <div key={childId} className={cn(ROW_CARD_WIDTH, "shrink-0")}>
+                  <NodeSlot id={childId} />
+                </div>
+              ))}
+            </div>
+          )}
+          {collectionIds.map((childId) => (
+            <NodeSlot key={childId} id={childId} />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-2 md:gap-3">
+          {children.map((childId) => (
+            <NodeSlot key={childId} id={childId} />
+          ))}
+        </div>
+      )}
+
+      <div className="mt-2 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={addClip}
+          className="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:text-zinc-100"
+        >
+          Add clip
+        </button>
+        {rejection ? (
+          <span role="status" className="truncate text-xs text-red-400">
+            {rejection}
+          </span>
+        ) : null}
+      </div>
+    </>
+  );
+
+  if (bare) {
+    return (
+      <div data-board-root>
+        <BranchContext value={childBranch}>{contents}</BranchContext>
+      </div>
+    );
+  }
+
   return (
     // `col-span-full`: a collection nested in another sits in its parent's grid
     // of clip cards, and takes a whole row rather than one card's column.
@@ -418,7 +561,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
       data-branch-in-cut={on}
       className={cn(
         "col-span-full border border-zinc-800 bg-zinc-950/60 p-2 md:p-3",
-        isRoot ? "rounded-xl" : "rounded-l-xl border-r-0 pr-0 md:pr-0",
+        isRoot || isTopLevel ? "rounded-xl" : "rounded-l-xl border-r-0 pr-0 md:pr-0",
       )}
     >
       {/* THE WHOLE BAR TOGGLES: name, duration and the space between them are
@@ -537,79 +680,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
           render only while open, so a closed collection mounts none of its
           cards. */}
       <div id={bodyId} hidden={collapsed}>
-        <BranchContext value={childBranch}>
-        {collapsed ? null : (
-          <>
-            {unread ? (
-              <p className="rounded-lg border border-dashed border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-300/80">
-                {summarized
-                  ? "Not read yet. Its stored summary is answering for it."
-                  : "Not read yet, and nothing is stored about what it holds."}{" "}
-                <button
-                  type="button"
-                  onClick={() => void open()}
-                  disabled={reading}
-                  className="ml-1 rounded-md border border-amber-400/40 px-2 py-0.5 text-amber-200 transition-colors hover:border-amber-300 hover:text-amber-100 disabled:cursor-wait disabled:opacity-60"
-                >
-                  {reading ? "Reading…" : "Open"}
-                </button>
-              </p>
-            ) : loadState === "missing" ? (
-              <p className="px-1 py-2 text-xs text-zinc-500">Gone from storage.</p>
-            ) : children.length === 0 ? (
-              <p className="px-1 py-2 text-xs text-zinc-600">Empty.</p>
-            ) : layout === "row" ? (
-              // ONE ROW THAT RUNS OFF THE EDGE, scrolled sideways, the way the
-              // film strip reads the reel. A collection's height then stops
-              // depending on how much it holds, which is what makes a document
-              // this deep scannable by scrolling the page.
-              //
-              // NESTED COLLECTIONS STAY STACKED, below the clips: a folder is
-              // not a card, and a horizontal scroller full of folders hides the
-              // thing you opened the folder to see. So the children are split
-              // by kind here — the only place that distinction matters.
-              <div className="grid gap-2">
-                {clipIds.length === 0 ? null : (
-                  <div
-                    data-board-row
-                    className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:thin] md:gap-3"
-                  >
-                    {clipIds.map((childId) => (
-                      <div key={childId} className={cn(ROW_CARD_WIDTH, "shrink-0")}>
-                        <NodeSlot id={childId} />
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {collectionIds.map((childId) => (
-                  <NodeSlot key={childId} id={childId} />
-                ))}
-              </div>
-            ) : (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-2 md:gap-3">
-                {children.map((childId) => (
-                  <NodeSlot key={childId} id={childId} />
-                ))}
-              </div>
-            )}
-
-            <div className="mt-2 flex items-center gap-3">
-              <button
-                type="button"
-                onClick={addClip}
-                className="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:text-zinc-100"
-              >
-                Add clip
-              </button>
-              {rejection ? (
-                <span role="status" className="truncate text-xs text-red-400">
-                  {rejection}
-                </span>
-              ) : null}
-            </div>
-          </>
-        )}
-        </BranchContext>
+        <BranchContext value={childBranch}>{collapsed ? null : contents}</BranchContext>
       </div>
     </section>
   );
@@ -669,12 +740,17 @@ function Toolbar({ rootId }: Readonly<{ rootId: ReturnType<typeof parseNodeId> }
 export function Board({
   initialFilmStripSize = "default",
   initialBoardLayout = "grid",
+  initialInactiveRows = [],
 }: Readonly<{
   /** What the server rendered the strip at, from the cookie. The settings
    *  dialog changes it live; this only makes the first paint agree. */
   initialFilmStripSize?: FilmStripSize;
   /** The same, for how the board lays clips out. */
   initialBoardLayout?: BoardLayout;
+  /** Collection ids switched off when the page was last left, from the cookie.
+   *  Applied to the fixture as it is built, on the server and the client alike,
+   *  so both render the same rows off. */
+  initialInactiveRows?: readonly string[];
 }> = {}) {
   const filmStripSize = useSyncExternalStore(
     subscribeFilmStripSize,
@@ -692,7 +768,9 @@ export function Board({
   // that does not parse, which is what should happen — it ships with the app.
   const buildStore = () => {
     const { graph, report } = loadFixtureGraph();
-    return { store: engine.createStore(graph), sealed: report.sealed, builtBy: engine };
+    const store = engine.createStore(graph);
+    restoreSwitchedOff(store, initialInactiveRows);
+    return { store, sealed: report.sealed, builtBy: engine };
   };
   const [built, setBuilt] = useState(buildStore);
   // A NEW ENGINE MEANS A NEW STORE. Only hot reload makes one: an edit to
@@ -737,6 +815,21 @@ function BoardBody({
   const pathname = usePathname();
   const params = useSearchParams();
   const topId = parseNodeId(FIXTURE_ROOT_ID);
+
+  // THE COOKIE FOLLOWS THE BOARD. Recomputed from the graph after every change,
+  // so a switch flipped, undone or redone are all the same event here, and the
+  // cookie cannot drift from what is on screen. Ids for rows not in the graph
+  // at all (inside a folder not read yet) are carried over, not dropped.
+  // Written only when the set actually changed.
+  useEffect(() => {
+    const saved = inactiveRowsFromCookies(document.cookie);
+    const unread = saved.filter((raw) => {
+      const parsed = tryParseNodeId(raw);
+      return parsed.ok && getNode(graph, parsed.value) === undefined;
+    });
+    const next = [...switchedOffIds(graph), ...unread];
+    if (encodeInactiveRows(next) !== encodeInactiveRows(saved)) writeInactiveRows(next);
+  }, [graph]);
 
   // IN THE URL, so the browser's Back button goes back up, and a link to a
   // collection opens on it. `?focus=` naming the real root, or nothing valid,
@@ -794,7 +887,14 @@ function BoardBody({
           inside `main`'s padding) with no offsets to keep in step, and it
           settles into its own spot at the end of the board. The background is
           the page's, so cards scrolling under it do not show through. */}
-      <div className="sticky bottom-0 z-40 mt-6 bg-zinc-950 pt-3 pb-4 max-md:-mx-2">
+      {/* THE SPACER THAT PUTS THE STRIP AT THE BOTTOM. It grows to fill the
+          screen when the board is short, so the strip sits on the bottom edge
+          instead of right under the last row; with a tall board it collapses
+          to its 24px minimum, the gap the strip used to keep as a margin, and
+          `sticky` does the pinning while the page scrolls. The page and `main`
+          above are flex columns for this; see `app/page.tsx`. */}
+      <div aria-hidden="true" className="min-h-6 flex-1" />
+      <div className="sticky bottom-0 z-40 bg-zinc-950 pt-3 pb-4 max-md:-mx-2">
         <BoardFilmStrip size={filmStripSize} />
       </div>
     </>
