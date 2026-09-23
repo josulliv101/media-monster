@@ -43,7 +43,7 @@ import { BoardFilmStrip } from "./board-film-strip";
 import { RowMenu } from "./row-menu";
 import type { RowAction } from "./row-actions";
 import { SwipeGroup, SwipeRow } from "./swipe-row";
-import { RowDragProvider, RowDropPlaceholder, useRowDrag } from "./row-drag";
+import { BoardDragProvider, DropPlaceholder, useBoardDrag } from "./board-drag";
 import { readCollection, restoreSwitchedOff } from "./read-collection";
 import {
   BoardPreview,
@@ -289,6 +289,9 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
   const selection = useSelectionActions();
   const branch = use(BranchContext);
   const openPreview = use(BoardPreviewContext);
+  const boardDrag = useBoardDrag();
+  // Faded while it is the one being dragged, like a dragged row.
+  const beingDragged = boardDrag.state.dragId === id;
 
   // NOT DIMMED WHEN ITS BRANCH IS OFF. The card is material you are keeping
   // either way; the row above says whether it plays (its icon and switch), so
@@ -298,10 +301,12 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
   return (
     <div
       data-clip-card
+      data-clip-drop={id}
       data-in-cut={branch.offBy === null}
       title={branch.offByName === null ? undefined : `Not in the film strip: ${branch.offByName} is off`}
       className={cn(
-        "group/clip flex flex-col overflow-hidden rounded-lg border transition-colors",
+        "group/clip relative flex flex-col overflow-hidden rounded-lg border transition-[border-color,background-color,opacity]",
+        beingDragged && "opacity-40",
         selected
           ? "border-sky-400/60 bg-sky-400/10 text-zinc-50"
           : "border-zinc-800 bg-zinc-900/40 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-900",
@@ -324,13 +329,29 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
         <span data-clip-picture={id} className="block">
           <ClipPicture media={data.media} seconds={data.seconds} />
         </span>
-        <span className="flex items-baseline justify-between gap-3 px-3 py-2">
+        {/* `pr-9` keeps the duration clear of the grip, which sits over the
+            end of this line. */}
+        <span className="flex items-baseline justify-between gap-3 py-2 pr-9 pl-3">
           <span className="min-w-0 truncate text-sm">{data.title}</span>
           <span className="shrink-0 text-xs tabular-nums text-zinc-500">
             {formatSeconds(data.seconds)}
           </span>
         </span>
       </button>
+      {/* THE DRAG GRIP, bottom right, over the end of the title line. Outside
+          the card's button, so pressing it never opens the preview. Press and
+          drag to move the clip anywhere in the tree (`board-drag.tsx`).
+          Pointer-only for now, like a row's. */}
+      <span
+        aria-hidden="true"
+        data-clip-drag-handle
+        title="Drag to move"
+        style={{ touchAction: "none" }}
+        onPointerDown={(event) => boardDrag.start(id, data.title, "clip", event)}
+        className="absolute right-1 bottom-1 flex size-7 cursor-grab items-center justify-center rounded-md text-zinc-600 transition-colors hover:bg-zinc-700/60 hover:text-zinc-200"
+      >
+        <GripVertical className="size-4" />
+      </span>
     </div>
   );
 }
@@ -422,18 +443,19 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   const isTopLevel = showingRealRoot && parentId !== null && graph.rootIds.includes(parentId);
   const [collapsed, setCollapsed] = useState(!isRoot);
 
-  // A ROW BEING DRAGGED (see `row-drag.tsx`). This card draws its part of it:
+  // A ROW BEING DRAGGED (see `board-drag.tsx`). This card draws its part of it:
   // faded if it is the one being dragged, ringed if it is a CLOSED row about to
   // take the drop, and the parted-rows placeholder among its children if it is
   // the open row the drop will land in.
-  const rowDrag = useRowDrag();
-  const dropTarget = rowDrag.state.target;
-  const beingDragged = rowDrag.state.dragId === id;
+  const boardDrag = useBoardDrag();
+  const dropTarget = boardDrag.state.target;
+  const beingDragged = boardDrag.state.dragId === id;
   const intoWhileClosed =
     dropTarget !== null && dropTarget.kind === "into" && dropTarget.parentId === id && collapsed;
   const placeholderAt =
     dropTarget !== null && dropTarget.parentId === id && !intoWhileClosed ? dropTarget.index : null;
-  const placeholder = <RowDropPlaceholder name={rowDrag.state.dragName} />;
+  const dragKind = boardDrag.state.dragKind;
+  const placeholder = <DropPlaceholder name={boardDrag.state.dragName} kind={dragKind} />;
   const bodyId = useId();
 
   // AN UNREAD COLLECTION IS NOT AN EMPTY ONE, and this is the only place the app
@@ -460,14 +482,22 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
     return child === undefined || child.sealed || child.kind !== "collection";
   });
   const collectionIds = children.filter((childId) => !clipIds.includes(childId));
-  // In the row layout the rows are stacked apart from the clips, so the
-  // placeholder goes before the first ROW at or after its index.
+  // In the row layout the rows are stacked apart from the clips, so a dragged
+  // ROW's placeholder goes before the first row at or after its index, and a
+  // dragged CLIP's before the first clip at or after it, in the clips' strip.
+  const rowSlotAt = placeholderAt !== null && dragKind === "row" ? placeholderAt : null;
+  const clipSlotAt = placeholderAt !== null && dragKind === "clip" ? placeholderAt : null;
   const firstCollectionAtOrAfter =
-    placeholderAt === null
+    rowSlotAt === null
       ? null
       : (collectionIds
           .map((childId) => children.indexOf(childId))
-          .find((index) => index >= placeholderAt) ?? null);
+          .find((index) => index >= rowSlotAt) ?? null);
+  const firstClipAtOrAfter =
+    clipSlotAt === null
+      ? null
+      : (clipIds.map((childId) => children.indexOf(childId)).find((index) => index >= clipSlotAt) ??
+        null);
   const summarized = total?.certainty === "estimated";
 
   // OPENING READS IT. `store.load` is IO landing: no patch, no history entry,
@@ -535,27 +565,35 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
         // thing you opened the folder to see. So the children are split
         // by kind here — the only place that distinction matters.
         <div className="grid gap-2">
-          {clipIds.length === 0 ? null : (
+          {clipIds.length === 0 && clipSlotAt === null ? null : (
             <div
               data-board-row
               className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:thin] md:gap-3"
             >
               {clipIds.map((childId) => (
-                <div key={childId} className={cn(ROW_CARD_WIDTH, "shrink-0")}>
-                  <NodeSlot id={childId} />
-                </div>
+                <Fragment key={childId}>
+                  {clipSlotAt !== null && children.indexOf(childId) === firstClipAtOrAfter ? (
+                    <div className={cn(ROW_CARD_WIDTH, "shrink-0")}>{placeholder}</div>
+                  ) : null}
+                  <div className={cn(ROW_CARD_WIDTH, "shrink-0")}>
+                    <NodeSlot id={childId} />
+                  </div>
+                </Fragment>
               ))}
+              {clipSlotAt !== null && firstClipAtOrAfter === null ? (
+                <div className={cn(ROW_CARD_WIDTH, "shrink-0")}>{placeholder}</div>
+              ) : null}
             </div>
           )}
           {collectionIds.map((childId) => (
             <Fragment key={childId}>
-              {placeholderAt !== null && children.indexOf(childId) === firstCollectionAtOrAfter
+              {rowSlotAt !== null && children.indexOf(childId) === firstCollectionAtOrAfter
                 ? placeholder
                 : null}
               <NodeSlot id={childId} />
             </Fragment>
           ))}
-          {placeholderAt !== null && firstCollectionAtOrAfter === null ? placeholder : null}
+          {rowSlotAt !== null && firstCollectionAtOrAfter === null ? placeholder : null}
         </div>
       ) : (
         <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-2 md:gap-3">
@@ -740,7 +778,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
           ) : null}
           {/* THE DRAG GRIP, last in the row so every grip sits against its
               box's right edge. Press and drag it to move the row anywhere in
-              the tree (`row-drag.tsx`). Not on the row the board is showing:
+              the tree (`board-drag.tsx`). Not on the row the board is showing:
               nothing around it is on the page to move it next to.
               Pointer-only for now, so it stays out of the accessibility tree
               rather than announce a control a keyboard cannot use. */}
@@ -750,7 +788,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
               data-row-drag-handle
               title="Drag to move"
               style={{ touchAction: "none" }}
-              onPointerDown={(event) => rowDrag.start(id, data.name, event)}
+              onPointerDown={(event) => boardDrag.start(id, data.name, "row", event)}
               className="flex shrink-0 cursor-grab items-center self-stretch rounded-lg px-1 text-zinc-600 transition-colors hover:bg-zinc-700/60 hover:text-zinc-200"
             >
               <GripVertical className="size-4" />
@@ -1204,7 +1242,7 @@ function BoardBody({
           treeFaded && "opacity-15",
         )}
       >
-        <RowDragProvider>
+        <BoardDragProvider>
           <BoardFocusContext value={{ shownRootId, focus }}>
             <BoardLayoutContext value={boardLayout}>
               <BoardPreviewContext value={openPreview}>
@@ -1219,7 +1257,7 @@ function BoardBody({
               </BoardPreviewContext>
             </BoardLayoutContext>
           </BoardFocusContext>
-        </RowDragProvider>
+        </BoardDragProvider>
       </div>
       {preview === null || previewedId === null ? null : (
         <BoardPreview
