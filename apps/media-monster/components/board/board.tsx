@@ -614,8 +614,9 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
           after them are one button. It bleeds 6px into the card's padding on three sides
           (block boxes, so the negative margins widen the bar rather than
           shrinking anything's natural width) and pads back by the same 6px,
-          so the text sits exactly where the padding put it. The hover tint and
-          focus ring then read as the bar, not as a tight box round the name. */}
+          so the text sits exactly where the padding put it. The row's hover
+          tint and focus ring (on the header, below) then read as the whole
+          row, not as a tight box round the name. */}
       {/* ON A PHONE THE BAR SWIPES LEFT to show the row's actions behind it
           (`swipe-row.tsx`); the ⋮ and "go to" leave the bar there. */}
       <SwipeRow
@@ -623,7 +624,17 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
         actions={trayActions}
         className={cn("-mx-1.5 -mt-1.5", collapsed ? "-mb-1.5" : "mb-0.5")}
       >
-        <header className="flex items-stretch gap-1">
+        {/* THE WHOLE ROW TINTS on hover, and while its bar has keyboard focus
+            or its ⋮ menu is open, icons included; the tint used to stop where
+            the bar button did. The icons take a brighter tint of their own on
+            top, so the one under the pointer still reads as its own target. */}
+        <header
+          className={cn(
+            "group/row flex items-stretch gap-1 rounded-lg transition-colors hover:bg-zinc-800/60",
+            "has-[[data-collection-toggle]:focus-visible]:bg-zinc-800/60 has-[[data-collection-toggle]:focus-visible]:outline-2 has-[[data-collection-toggle]:focus-visible]:-outline-offset-2 has-[[data-collection-toggle]:focus-visible]:outline-sky-500",
+            "has-[[data-row-menu-button][aria-expanded=true]]:bg-zinc-800/60",
+          )}
+        >
           <h3 className="min-w-0 flex-1 text-lg font-semibold text-zinc-100">
             <button
               type="button"
@@ -631,7 +642,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
               aria-controls={bodyId}
               data-collection-toggle
               onClick={() => setCollapsed((was) => !was)}
-              className="group flex w-full items-center gap-3 rounded-lg px-1.5 py-3 text-left transition-colors hover:bg-zinc-800/60 focus-visible:bg-zinc-800/60 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-500"
+              className="group flex w-full items-center gap-3 rounded-lg px-1.5 py-3 text-left focus-visible:outline-none"
             >
               {/* BASELINE, so the small duration sits on the name's line rather
                   than centred against its taller box; the icon and the triangle
@@ -679,7 +690,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
                   viewBox="0 0 10 10"
                   aria-hidden="true"
                   className={cn(
-                    "ml-0.5 size-3 shrink-0 self-center fill-zinc-500 transition-[rotate,fill] duration-150 group-hover:fill-zinc-100 group-focus-visible:fill-zinc-100 motion-reduce:transition-none",
+                    "ml-0.5 size-3 shrink-0 self-center fill-zinc-500 transition-[rotate,fill] duration-150 group-hover/row:fill-zinc-100 group-focus-visible:fill-zinc-100 motion-reduce:transition-none",
                     collapsed ? null : "rotate-90",
                   )}
                 >
@@ -699,7 +710,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
               title={`Go to ${data.name}: show it, and everything inside it, on its own`}
               data-collection-focus
               onClick={() => focus(id)}
-              className="flex shrink-0 items-center rounded-lg px-2 text-zinc-500 transition-colors max-md:sr-only max-md:focus-visible:not-sr-only hover:bg-zinc-800/60 hover:text-zinc-100 focus-visible:bg-zinc-800/60 focus-visible:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500"
+              className="flex shrink-0 items-center rounded-lg px-2 text-zinc-500 transition-colors max-md:sr-only max-md:focus-visible:not-sr-only hover:bg-zinc-700/60 hover:text-zinc-100 focus-visible:bg-zinc-700/60 focus-visible:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500"
             >
               {/* LogIn — an arrow going IN through a door: "enter this collection",
                   which is what the button does. */}
