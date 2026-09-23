@@ -76,6 +76,11 @@ import {
   subscribeBoardLayout,
 } from "@/components/settings/board-layout-store";
 import type { BoardLayout } from "@/components/settings/board-layout-preference";
+import {
+  readHoverPlay,
+  readHoverPlayOnServer,
+  subscribeHoverPlay,
+} from "@/components/settings/hover-play-store";
 import { switchedOffAt } from "@/lib/engine/branch-activity";
 import {
   encodeInactiveRows,
@@ -192,22 +197,92 @@ function ClipPicture({ media, seconds }: Readonly<{ media: ClipMedia | null; sec
     // eslint-disable-next-line @next/next/no-img-element -- a Cloudinary transform is already the optimised image
     return <img src={cardStill(media, seconds) ?? media.src} alt="" className={frame} />;
   }
+  return <HoverVideo src={media.src} poster={cardStill(media, seconds)} className={frame} />;
+}
+
+/** How long the pointer must stay put on a card before its video plays. */
+const REST_MS = 300;
+/** Movement smaller than this is a hand holding still, not a hand moving on. */
+const REST_JITTER_PX = 3;
+
+/**
+ * A CARD'S VIDEO PLAYS ONCE THE POINTER COMES TO REST ON IT, not as it passes
+ * over: sweeping across a board of cards started every video under the path,
+ * each one fetching. The pointer has to stay within a few pixels for
+ * `REST_MS`; any real movement before then starts the wait again, and once it
+ * plays, moving about the card does not stop it. Leaving stops it and rewinds
+ * it to its still.
+ *
+ * A MOUSE (or pen) ONLY: a touch has no hover, and a tap opens the preview.
+ *
+ * Switched off entirely by the Settings choice "Play clips on hover"
+ * (`hover-play-store.ts`), read live, so turning it off stops a card playing now.
+ */
+function HoverVideo({
+  src,
+  poster,
+  className,
+}: Readonly<{ src: string; poster: string | null; className: string }>) {
+  const hoverPlay = useSyncExternalStore(subscribeHoverPlay, readHoverPlay, readHoverPlayOnServer);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const restRef = useRef<{ x: number; y: number; timer: number } | null>(null);
+
+  const stopWaiting = () => {
+    if (restRef.current !== null) window.clearTimeout(restRef.current.timer);
+    restRef.current = null;
+  };
+  const stop = () => {
+    stopWaiting();
+    const video = videoRef.current;
+    if (video === null || video.paused) return;
+    video.pause();
+    video.currentTime = 0;
+  };
+
+  // Off now: nothing plays, including a card playing when it was switched off.
+  // And no timer outlives the card.
+  useEffect(() => {
+    if (hoverPlay === "off") stop();
+    return stopWaiting;
+    // `stop` and `stopWaiting` read refs only.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hoverPlay]);
+
+  const settle = (event: React.PointerEvent<HTMLVideoElement>) => {
+    if (hoverPlay === "off" || event.pointerType === "touch") return;
+    const video = event.currentTarget;
+    if (!video.paused) return;
+    const rest = restRef.current;
+    if (
+      rest !== null &&
+      Math.hypot(event.clientX - rest.x, event.clientY - rest.y) <= REST_JITTER_PX
+    ) {
+      return;
+    }
+    stopWaiting();
+    restRef.current = {
+      x: event.clientX,
+      y: event.clientY,
+      timer: window.setTimeout(() => {
+        restRef.current = null;
+        void video.play().catch(() => undefined);
+      }, REST_MS),
+    };
+  };
+
   return (
     <video
-      src={media.src}
-      poster={cardStill(media, seconds) ?? undefined}
+      ref={videoRef}
+      src={src}
+      poster={poster ?? undefined}
       muted
       loop
       playsInline
       preload="none"
-      className={frame}
-      onPointerEnter={(event) => {
-        void event.currentTarget.play().catch(() => undefined);
-      }}
-      onPointerLeave={(event) => {
-        event.currentTarget.pause();
-        event.currentTarget.currentTime = 0;
-      }}
+      className={className}
+      onPointerEnter={settle}
+      onPointerMove={settle}
+      onPointerLeave={stop}
     />
   );
 }
