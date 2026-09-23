@@ -337,6 +337,18 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
     });
   };
   const isRoot = id === (shownRootId ?? graph.rootIds[0]);
+  // THE REAL ROOT IS NOT DRAWN AS A BOX. It is the board itself — the page's
+  // heading names it and the toolbar carries its running time — so its
+  // children are the top level. A collection "gone to" keeps its box: it is the
+  // thing you went to, and the trail names it.
+  //
+  // Asked of the GRAPH, not of `shownRootId` being null: the board always hands
+  // down the id it shows, the real root included, so "nothing gone to" is "the
+  // shown root is a real root".
+  const showingRealRoot = shownRootId === null || graph.rootIds.includes(shownRootId);
+  const bare = isRoot && showingRealRoot;
+  const parentId = getParent(graph, id);
+  const isTopLevel = showingRealRoot && parentId !== null && graph.rootIds.includes(parentId);
   const [collapsed, setCollapsed] = useState(!isRoot);
   const bodyId = useId();
 
@@ -400,6 +412,88 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
     setRejection(result.ok ? null : `${result.error.code}: ${result.error.message}`);
   };
 
+  // What a collection holds, drawn inside its box — or, for the real root,
+  // drawn as the board itself.
+  const contents = (
+    <>
+      {unread ? (
+        <p className="rounded-lg border border-dashed border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-300/80">
+          {summarized
+            ? "Not read yet. Its stored summary is answering for it."
+            : "Not read yet, and nothing is stored about what it holds."}{" "}
+          <button
+            type="button"
+            onClick={() => void open()}
+            disabled={reading}
+            className="ml-1 rounded-md border border-amber-400/40 px-2 py-0.5 text-amber-200 transition-colors hover:border-amber-300 hover:text-amber-100 disabled:cursor-wait disabled:opacity-60"
+          >
+            {reading ? "Reading…" : "Open"}
+          </button>
+        </p>
+      ) : loadState === "missing" ? (
+        <p className="px-1 py-2 text-xs text-zinc-500">Gone from storage.</p>
+      ) : children.length === 0 ? (
+        <p className="px-1 py-2 text-xs text-zinc-600">Empty.</p>
+      ) : layout === "row" ? (
+        // ONE ROW THAT RUNS OFF THE EDGE, scrolled sideways, the way the
+        // film strip reads the reel. A collection's height then stops
+        // depending on how much it holds, which is what makes a document
+        // this deep scannable by scrolling the page.
+        //
+        // NESTED COLLECTIONS STAY STACKED, below the clips: a folder is
+        // not a card, and a horizontal scroller full of folders hides the
+        // thing you opened the folder to see. So the children are split
+        // by kind here — the only place that distinction matters.
+        <div className="grid gap-2">
+          {clipIds.length === 0 ? null : (
+            <div
+              data-board-row
+              className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:thin] md:gap-3"
+            >
+              {clipIds.map((childId) => (
+                <div key={childId} className={cn(ROW_CARD_WIDTH, "shrink-0")}>
+                  <NodeSlot id={childId} />
+                </div>
+              ))}
+            </div>
+          )}
+          {collectionIds.map((childId) => (
+            <NodeSlot key={childId} id={childId} />
+          ))}
+        </div>
+      ) : (
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-2 md:gap-3">
+          {children.map((childId) => (
+            <NodeSlot key={childId} id={childId} />
+          ))}
+        </div>
+      )}
+
+      <div className="mt-2 flex items-center gap-3">
+        <button
+          type="button"
+          onClick={addClip}
+          className="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:text-zinc-100"
+        >
+          Add clip
+        </button>
+        {rejection ? (
+          <span role="status" className="truncate text-xs text-red-400">
+            {rejection}
+          </span>
+        ) : null}
+      </div>
+    </>
+  );
+
+  if (bare) {
+    return (
+      <div data-board-root>
+        <BranchContext value={childBranch}>{contents}</BranchContext>
+      </div>
+    );
+  }
+
   return (
     // `col-span-full`: a collection nested in another sits in its parent's grid
     // of clip cards, and takes a whole row rather than one card's column.
@@ -418,7 +512,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
       data-branch-in-cut={on}
       className={cn(
         "col-span-full border border-zinc-800 bg-zinc-950/60 p-2 md:p-3",
-        isRoot ? "rounded-xl" : "rounded-l-xl border-r-0 pr-0 md:pr-0",
+        isRoot || isTopLevel ? "rounded-xl" : "rounded-l-xl border-r-0 pr-0 md:pr-0",
       )}
     >
       {/* THE WHOLE BAR TOGGLES: name, duration and the space between them are
@@ -537,79 +631,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
           render only while open, so a closed collection mounts none of its
           cards. */}
       <div id={bodyId} hidden={collapsed}>
-        <BranchContext value={childBranch}>
-        {collapsed ? null : (
-          <>
-            {unread ? (
-              <p className="rounded-lg border border-dashed border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-300/80">
-                {summarized
-                  ? "Not read yet. Its stored summary is answering for it."
-                  : "Not read yet, and nothing is stored about what it holds."}{" "}
-                <button
-                  type="button"
-                  onClick={() => void open()}
-                  disabled={reading}
-                  className="ml-1 rounded-md border border-amber-400/40 px-2 py-0.5 text-amber-200 transition-colors hover:border-amber-300 hover:text-amber-100 disabled:cursor-wait disabled:opacity-60"
-                >
-                  {reading ? "Reading…" : "Open"}
-                </button>
-              </p>
-            ) : loadState === "missing" ? (
-              <p className="px-1 py-2 text-xs text-zinc-500">Gone from storage.</p>
-            ) : children.length === 0 ? (
-              <p className="px-1 py-2 text-xs text-zinc-600">Empty.</p>
-            ) : layout === "row" ? (
-              // ONE ROW THAT RUNS OFF THE EDGE, scrolled sideways, the way the
-              // film strip reads the reel. A collection's height then stops
-              // depending on how much it holds, which is what makes a document
-              // this deep scannable by scrolling the page.
-              //
-              // NESTED COLLECTIONS STAY STACKED, below the clips: a folder is
-              // not a card, and a horizontal scroller full of folders hides the
-              // thing you opened the folder to see. So the children are split
-              // by kind here — the only place that distinction matters.
-              <div className="grid gap-2">
-                {clipIds.length === 0 ? null : (
-                  <div
-                    data-board-row
-                    className="flex gap-2 overflow-x-auto pb-1 [scrollbar-width:thin] md:gap-3"
-                  >
-                    {clipIds.map((childId) => (
-                      <div key={childId} className={cn(ROW_CARD_WIDTH, "shrink-0")}>
-                        <NodeSlot id={childId} />
-                      </div>
-                    ))}
-                  </div>
-                )}
-                {collectionIds.map((childId) => (
-                  <NodeSlot key={childId} id={childId} />
-                ))}
-              </div>
-            ) : (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-2 md:gap-3">
-                {children.map((childId) => (
-                  <NodeSlot key={childId} id={childId} />
-                ))}
-              </div>
-            )}
-
-            <div className="mt-2 flex items-center gap-3">
-              <button
-                type="button"
-                onClick={addClip}
-                className="rounded-md border border-zinc-800 px-2 py-1 text-xs text-zinc-400 transition-colors hover:border-zinc-700 hover:text-zinc-100"
-              >
-                Add clip
-              </button>
-              {rejection ? (
-                <span role="status" className="truncate text-xs text-red-400">
-                  {rejection}
-                </span>
-              ) : null}
-            </div>
-          </>
-        )}
-        </BranchContext>
+        <BranchContext value={childBranch}>{collapsed ? null : contents}</BranchContext>
       </div>
     </section>
   );
