@@ -184,3 +184,16 @@ html body[data-scroll-locked] {
     overflow: hidden;
   }
 }
+
+/* THE BOARD'S PREVIEW holds the page still while it is open
+   (`components/board/board-preview.tsx`): it and the card it grows out of are
+   both measured in viewport positions, so the page must not scroll between
+   the two. `board-preview-gutter` is added only when the page had a
+   scrollbar, and keeps its width reserved so hiding it moves nothing. */
+html.board-preview-open,
+html.board-preview-open body {
+  overflow: hidden;
+}
+html.board-preview-gutter {
+  scrollbar-gutter: stable;
+}

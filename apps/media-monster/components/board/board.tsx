@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, use, useEffect, useId, useState, useSyncExternalStore } from "react";
+import { createContext, use, useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
 import {
   documentOrder,
   getNode,
@@ -24,6 +24,7 @@ import {
   useIsSelected,
   useNode,
   useSelectionActions,
+  useSelectionAnchor,
   useStore,
 } from "@/lib/engine/bindings";
 import { engine } from "@/lib/engine/engine";
@@ -33,6 +34,8 @@ import {
   readUnreadChildren,
 } from "@/lib/engine/fixture-document";
 import { BoardFilmStrip } from "./board-film-strip";
+import { BoardPreview, cardPicture, rectOf, type Rect } from "./board-preview";
+import { cardStill } from "./clip-still";
 import type { FilmStripSize } from "@storyboard/ui/film-strip";
 import {
   readFilmStripSize,
@@ -43,7 +46,6 @@ import {
   subscribeBoardLayout,
 } from "@/components/settings/board-layout-store";
 import type { BoardLayout } from "@/components/settings/board-layout-preference";
-import { imageUrl, videoFrameUrl } from "@/lib/media/cloudinary";
 import { switchedOffAt } from "@/lib/engine/branch-activity";
 import {
   encodeInactiveRows,
@@ -126,8 +128,6 @@ function Duration({
   );
 }
 
-const THUMB = { width: 480, height: 270 } as const;
-
 /**
  * The picture on a clip card: the VIDEO itself for a video clip, playing muted
  * while the pointer is over it, and the still for an image clip.
@@ -146,12 +146,12 @@ function ClipPicture({ media, seconds }: Readonly<{ media: ClipMedia | null; sec
   }
   if (media.kind === "image") {
     // eslint-disable-next-line @next/next/no-img-element -- a Cloudinary transform is already the optimised image
-    return <img src={imageUrl(media.src, THUMB) ?? media.src} alt="" className={frame} />;
+    return <img src={cardStill(media, seconds) ?? media.src} alt="" className={frame} />;
   }
   return (
     <video
       src={media.src}
-      poster={videoFrameUrl(media.src, Math.min(0.35, seconds / 2), THUMB) ?? undefined}
+      poster={cardStill(media, seconds) ?? undefined}
       muted
       loop
       playsInline
@@ -271,6 +271,10 @@ type Branch = Readonly<{ offBy: NodeId | null; offByName: string | null }>;
 const ON: Branch = { offBy: null, offByName: null };
 const BranchContext = createContext<Branch>(ON);
 
+/** Opens the preview on a clip, growing it out of that clip's card. Provided
+ *  by `BoardBody`, which owns the preview and the space it fills. */
+const BoardPreviewContext = createContext<(id: NodeId) => void>(() => undefined);
+
 /** A clip card's width in a row, where the grid's `1fr` has no meaning: the
  *  cards run off the edge instead of sharing the width. */
 const ROW_CARD_WIDTH = "w-56";
@@ -279,6 +283,7 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
   const selected = useIsSelected(id);
   const selection = useSelectionActions();
   const branch = use(BranchContext);
+  const openPreview = use(BoardPreviewContext);
 
   // NOT DIMMED WHEN ITS BRANCH IS OFF. The card is material you are keeping
   // either way; the row above says whether it plays (its icon and switch), so
@@ -300,10 +305,18 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
       <button
         type="button"
         aria-pressed={selected}
-        onClick={() => selection.toggle(id)}
+        aria-haspopup="dialog"
+        data-clip-open
+        // A CLICK OPENS THE PREVIEW, and selects the clip so the film strip
+        // goes to it. Ctrl or Cmd keeps the old gesture: add it to, or take it
+        // out of, the selection without opening anything.
+        onClick={(event) => {
+          if (event.ctrlKey || event.metaKey) selection.toggle(id);
+          else openPreview(id);
+        }}
         className="flex w-full flex-col text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-500"
       >
-        <span className="block">
+        <span data-clip-picture={id} className="block">
           <ClipPicture media={data.media} seconds={data.seconds} />
         </span>
         <span className="flex items-baseline justify-between gap-3 px-3 py-2">
@@ -716,26 +729,55 @@ if (!registeredWith.has(defineNodeView)) {
   defineNodeView("collection", CollectionCard);
 }
 
-function Toolbar({ rootId }: Readonly<{ rootId: ReturnType<typeof parseNodeId> }>) {
+/**
+ * THE TOP BAR of the main content: the document's title on the far left, the
+ * reel's running time beside it, and undo and redo on the far right.
+ *
+ * THE TITLE IS THE ROOT COLLECTION'S NAME, read from the document rather than
+ * typed into the page, so the heading cannot disagree with the data it heads.
+ * It names the document whatever the board is looking at — "go to" changes the
+ * board, not which document this is; the trail below says where you are.
+ */
+function TopNav({ rootId }: Readonly<{ rootId: ReturnType<typeof parseNodeId> }>) {
   const { canUndo, canRedo, undo, redo } = useHistory();
+  const root = useNode(rootId);
+  const title =
+    root !== undefined && !root.sealed && root.kind === "collection" ? root.data.name : "Untitled";
   // THE REEL IS WHAT PLAYS: active clips only, so this agrees with the strip.
   const total = useFold("activeSeconds", rootId);
   const button =
     "flex items-center gap-1.5 rounded-md border border-zinc-800 px-2.5 py-1.5 text-xs text-zinc-300 transition-colors hover:border-zinc-700 hover:text-zinc-50 disabled:cursor-not-allowed disabled:border-zinc-900 disabled:text-zinc-700";
   return (
-    <div className="mb-4 flex items-center gap-2">
-      <button type="button" disabled={!canUndo} onClick={() => undo()} className={button}>
-        <Undo2 className="size-3.5" /> Undo
-      </button>
-      <button type="button" disabled={!canRedo} onClick={() => redo()} className={button}>
-        <Redo2 className="size-3.5" /> Redo
-      </button>
-      {total ? (
-        <span className="ml-2 text-xs">
-          Reel runs <Duration value={total.value} certainty={total.certainty} />
-        </span>
-      ) : null}
-    </div>
+    <header
+      data-top-nav
+      className="mb-4 flex items-center justify-between gap-3"
+    >
+      {/* Centred rather than baseline-aligned, so the divider sits in the
+          middle of the row between text of two different sizes. */}
+      <div className="flex min-w-0 items-center gap-3">
+        <h1 className="truncate text-lg font-semibold text-zinc-100">{title}</h1>
+        {/* A vertical rule between the title and what follows it, with room
+            to breathe: `mx-2` on top of the row's gap, 20px either side. */}
+        <span
+          aria-hidden="true"
+          data-top-nav-divider
+          className="mx-2 h-5 w-px shrink-0 bg-zinc-700"
+        />
+        {total ? (
+          <span className="shrink-0 text-xs">
+            Reel runs <Duration value={total.value} certainty={total.certainty} />
+          </span>
+        ) : null}
+      </div>
+      <div className="flex shrink-0 items-center gap-2">
+        <button type="button" disabled={!canUndo} onClick={() => undo()} className={button}>
+          <Undo2 className="size-3.5" /> Undo
+        </button>
+        <button type="button" disabled={!canRedo} onClick={() => redo()} className={button}>
+          <Redo2 className="size-3.5" /> Redo
+        </button>
+      </div>
+    </header>
   );
 }
 
@@ -867,22 +909,124 @@ function BoardBody({
     if (first !== null) selection.set([first]);
   };
 
+  // THE PREVIEW (see `board-preview.tsx`). Both rects are measured in the
+  // click, after the page is locked still, so the zoom starts on the card
+  // exactly where it is on screen.
+  const [preview, setPreview] = useState<{
+    openedId: NodeId;
+    from: Rect | null;
+    stage: Rect;
+    closing: boolean;
+  } | null>(null);
+  const treeRef = useRef<HTMLDivElement>(null);
+  const stripRef = useRef<HTMLDivElement>(null);
+  const anchor = useSelectionAnchor();
+  const anchorNode = anchor === null ? undefined : getNode(graph, anchor);
+  // THE PREVIEW FOLLOWS THE SELECTION: pick another shot in the film strip and
+  // that is the one shown. Anything that is not a single clip leaves it on the
+  // clip it was showing.
+  const previewedId =
+    preview === null
+      ? null
+      : anchor !== null && anchorNode !== undefined && !anchorNode.sealed && anchorNode.kind === "clip"
+        ? anchor
+        : preview.openedId;
+
+  // THE STAGE: the board's column, from the top of the tree (or of the screen,
+  // scrolled past it, or the phone's top bar) down to the film strip.
+  const measureStage = (): Rect => {
+    const tree = treeRef.current;
+    const strip = stripRef.current;
+    if (tree === null || strip === null) {
+      return { left: 0, top: 0, width: window.innerWidth, height: window.innerHeight };
+    }
+    const column = tree.getBoundingClientRect();
+    const bar = document.querySelector("[data-mobile-top-bar]")?.getBoundingClientRect().bottom ?? 0;
+    const top = Math.max(column.top, bar, 0);
+    const bottom = strip.getBoundingClientRect().top;
+    return { left: column.left, top, width: column.width, height: Math.max(0, bottom - top) };
+  };
+
+  const openPreview = (id: NodeId) => {
+    selection.set([id]);
+    // Locked BEFORE measuring: the lock can hide the scrollbar, which moves
+    // everything, and the gutter class keeps its space when there was one.
+    const html = document.documentElement;
+    if (html.scrollHeight > html.clientHeight) html.classList.add("board-preview-gutter");
+    html.classList.add("board-preview-open");
+    const card = cardPicture(id);
+    setPreview({
+      openedId: id,
+      from: card === null ? null : rectOf(card),
+      stage: measureStage(),
+      closing: false,
+    });
+  };
+  const closePreview = () =>
+    setPreview((open) => (open === null || open.closing ? open : { ...open, closing: true }));
+  const previewClosed = () => {
+    // Focus back on the card it closed into, as a dialog hands it back to the
+    // button that opened it.
+    if (previewedId !== null) {
+      cardPicture(previewedId)?.closest("button")?.focus({ preventScroll: true });
+    }
+    setPreview(null);
+  };
+
+  // The page's scroll lock lasts exactly as long as the preview is up, and is
+  // let go if the board goes away with it open.
+  const previewing = preview !== null;
+  useEffect(() => {
+    if (!previewing) return;
+    return () => {
+      document.documentElement.classList.remove("board-preview-open", "board-preview-gutter");
+    };
+  }, [previewing]);
+  const treeFaded = preview !== null && !preview.closing;
+
   return (
     <>
       {/* The REEL's controls: undo, redo and the running time stay about the
           whole document wherever the board is looking. */}
-      <Toolbar rootId={topId} />
+      <TopNav rootId={topId} />
       {focusedId === null ? null : <FocusTrail shownRootId={focusedId} onGo={focus} />}
-      <BoardFocusContext value={{ shownRootId, focus }}>
-        <BoardLayoutContext value={boardLayout}>
-          {/* KEYED on the root it shows, so going somewhere is a fresh view:
-              the new top opens and everything inside it starts closed, rather
-              than inheriting whatever state that card had deeper in the tree. */}
-          <BranchContext value={rootBranch}>
-            <NodeSlot key={shownRootId} id={shownRootId} />
-          </BranchContext>
-        </BoardLayoutContext>
-      </BoardFocusContext>
+      {/* THE TREE FADES, AND STAYS MOUNTED, under an open preview: its rows keep
+          whatever you had open, and the preview closes back into a card that
+          is still where it was. `inert` takes it out of clicks and tabbing
+          while it is only scenery. */}
+      <div
+        ref={treeRef}
+        data-board-tree
+        inert={treeFaded}
+        className={cn(
+          "transition-opacity duration-300 motion-reduce:transition-none",
+          treeFaded && "opacity-15",
+        )}
+      >
+        <BoardFocusContext value={{ shownRootId, focus }}>
+          <BoardLayoutContext value={boardLayout}>
+            <BoardPreviewContext value={openPreview}>
+              {/* KEYED on the root it shows, so going somewhere is a fresh view:
+                  the new top opens and everything inside it starts closed, rather
+                  than inheriting whatever state that card had deeper in the tree. */}
+              <BranchContext value={rootBranch}>
+                <NodeSlot key={shownRootId} id={shownRootId} />
+              </BranchContext>
+            </BoardPreviewContext>
+          </BoardLayoutContext>
+        </BoardFocusContext>
+      </div>
+      {preview === null || previewedId === null ? null : (
+        <BoardPreview
+          clipId={previewedId}
+          from={preview.from}
+          initialStage={preview.stage}
+          measureStage={measureStage}
+          closing={preview.closing}
+          onClose={closePreview}
+          onClosed={previewClosed}
+        />
+      )}
       {/* PINNED TO THE BOTTOM OF THE VIEWPORT. The strip is the reel's timeline,
           so it stays in reach while the board scrolls above it. `sticky` rather
           than `fixed`: it keeps its place in the page's width (beside the rail,
@@ -896,7 +1040,7 @@ function BoardBody({
           `sticky` does the pinning while the page scrolls. The page and `main`
           above are flex columns for this; see `app/page.tsx`. */}
       <div aria-hidden="true" className="min-h-6 flex-1" />
-      <div className="sticky bottom-0 z-40 bg-zinc-950 pt-3 pb-4 max-md:-mx-2">
+      <div ref={stripRef} className="sticky bottom-0 z-40 bg-zinc-950 pt-3 pb-4 max-md:-mx-2">
         <BoardFilmStrip size={filmStripSize} />
       </div>
     </>
