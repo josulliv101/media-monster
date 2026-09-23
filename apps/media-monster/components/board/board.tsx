@@ -10,7 +10,7 @@ import {
   type NodeId,
 } from "@josulliv101/nested-collections";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ChevronRight, Film, Focus, Layers, Redo2, Undo2 } from "lucide-react";
+import { ChevronRight, Film, Layers, LogIn, Redo2, Undo2 } from "lucide-react";
 
 import {
   NodeSlot,
@@ -645,7 +645,9 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
             onClick={() => focus(id)}
             className="flex shrink-0 items-center rounded-lg px-2 text-zinc-500 transition-colors hover:bg-zinc-800/60 hover:text-zinc-100 focus-visible:bg-zinc-800/60 focus-visible:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500"
           >
-            <Focus className="size-4" aria-hidden="true" />
+            {/* LogIn — an arrow going IN through a door: "enter this collection",
+                which is what the button does. */}
+            <LogIn className="size-4" aria-hidden="true" />
           </button>
         )}
         {/* IN THE CUT OR NOT, for this whole branch. Its own control beside
