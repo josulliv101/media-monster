@@ -16,6 +16,7 @@
 export {
   FilmStrip,
   type FilmStripProps,
+  type FilmStripOpenOrigin,
   type FilmStripSize,
   type FilmStripSkimPreview,
 } from "./film-strip";

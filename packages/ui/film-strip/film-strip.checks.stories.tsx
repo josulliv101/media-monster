@@ -554,3 +554,111 @@ export const OutsideSelectionMovesThePlayhead: Story = {
     expect(now()).toBeLessThan(24);
   },
 };
+
+/* ── opening a shot ────────────────────────────────────────────────────── */
+
+type Opened = { id: string; frame: HTMLElement | null; seconds: number };
+
+function OpenHarness() {
+  const [opened, setOpened] = useState<Opened[]>([]);
+  return (
+    <div style={{ padding: 24 }}>
+      <FilmStrip
+        standalone={false}
+        shots={[plain("s1", 5), plain("s2", 5, { frames: ["#345", "#456"] }), plain("s3", 5)]}
+        onOpen={(id, origin) => setOpened((all) => [...all, { id, ...origin }])}
+      />
+      <output data-opened>
+        {opened
+          .map(
+            (open) =>
+              `${open.id}@${open.seconds.toFixed(1)}:${open.frame?.hasAttribute("data-seam-thumbnail") ?? "none"}`,
+          )
+          .join(",")}
+      </output>
+    </div>
+  );
+}
+
+function tapBox(canvas: HTMLElement, id: string, share: number): void {
+  const box = Array.from(canvas.querySelectorAll<HTMLElement>(".shot")).find(
+    (candidate) => candidate.getAttribute("data-seam-segment") === id,
+  );
+  if (box === undefined) throw new Error(`no box ${id}`);
+  const b = box.getBoundingClientRect();
+  const at = {
+    clientX: b.x + b.width * share,
+    clientY: b.y + b.height / 2,
+    bubbles: true,
+    isPrimary: true,
+    pointerId: 1,
+    button: 0,
+  };
+  box.dispatchEvent(new PointerEvent("pointerdown", at));
+  box.dispatchEvent(new PointerEvent("pointerup", at));
+}
+
+const openedText = (canvas: HTMLElement) =>
+  canvas.querySelector("[data-opened]")?.textContent ?? "";
+
+/**
+ * A DOUBLE-TAP OPENS the shot, from the frame it landed on and at the moment
+ * it landed on. One tap only selects; two taps on DIFFERENT boxes open nothing.
+ */
+export const DoubleTapOpensTheShot: Story = {
+  render: () => <OpenHarness />,
+  play: async ({ canvasElement }) => {
+    tapBox(canvasElement, "s1", 0.5);
+    await wait(50);
+    expect(openedText(canvasElement)).toBe("");
+
+    tapBox(canvasElement, "s2", 0.5);
+    await wait(50);
+    expect(openedText(canvasElement)).toBe("");
+
+    // The second tap on s2, three quarters in: 3.75 s into a 5 s shot.
+    tapBox(canvasElement, "s2", 0.75);
+    await waitFor(() => expect(openedText(canvasElement)).toMatch(/^s2@3\.\d:true$/));
+  },
+};
+
+/** Two taps too far apart are two taps, not a double-tap. */
+export const SlowTapsDoNotOpen: Story = {
+  render: () => <OpenHarness />,
+  play: async ({ canvasElement }) => {
+    tapBox(canvasElement, "s2", 0.5);
+    await wait(550);
+    tapBox(canvasElement, "s2", 0.5);
+    await wait(100);
+    expect(openedText(canvasElement)).toBe("");
+  },
+};
+
+/**
+ * THE PLAY BUTTON is on the selected box only, and opens it at the playhead
+ * without starting a pan. Enter on the bar does the same.
+ */
+export const PlayButtonAndEnterOpenTheSelectedShot: Story = {
+  render: () => <OpenHarness />,
+  play: async ({ canvasElement }) => {
+    expect(canvasElement.querySelector("[data-seam-open]")).toBeNull();
+
+    tapBox(canvasElement, "s3", 0.2);
+    const button = await waitFor(() => {
+      const found = canvasElement.querySelector<HTMLButtonElement>("[data-seam-open]");
+      expect(found?.getAttribute("data-seam-open")).toBe("s3");
+      return found as HTMLButtonElement;
+    });
+    button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, pointerId: 1, button: 0 }));
+    button.click();
+    // The tap put the playhead a fifth of the way in: 1 s into s3.
+    await waitFor(() => expect(openedText(canvasElement)).toMatch(/^s3@1\.\d:true$/));
+
+    const bar = canvasElement.querySelector<HTMLElement>("[data-seam-bar]");
+    if (bar === null) throw new Error("no bar");
+    bar.focus();
+    bar.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    await waitFor(() => expect(openedText(canvasElement).split(",")).toHaveLength(2));
+    expect(openedText(canvasElement).split(",")[1]).toMatch(/^s3@1\.\d:true$/);
+  },
+};
