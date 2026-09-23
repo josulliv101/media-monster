@@ -2,7 +2,13 @@
 
 import { documentOrder, getNode, getParent, type NodeId } from "@josulliv101/nested-collections";
 
-import { FilmStrip, LOOKS, type FilmStripShot, type FilmStripSize } from "@storyboard/ui/film-strip";
+import {
+  FilmStrip,
+  LOOKS,
+  type FilmStripOpenOrigin,
+  type FilmStripShot,
+  type FilmStripSize,
+} from "@storyboard/ui/film-strip";
 import { useGraph, useSelectionActions, useSelectionAnchor } from "@/lib/engine/bindings";
 import type { ClipMedia } from "@/lib/engine/node-types";
 import { switchedOffAt } from "@/lib/engine/branch-activity";
@@ -120,7 +126,14 @@ function shotsFromGraph(graph: ReturnType<typeof useGraph>, size: FilmStripSize)
   return { shots: out, clipIds: ids };
 }
 
-export function BoardFilmStrip({ size }: Readonly<{ size: FilmStripSize }>) {
+export function BoardFilmStrip({
+  size,
+  onOpen,
+}: Readonly<{
+  size: FilmStripSize;
+  /** A shot opened in the strip (double-tap, its play button, or Enter). */
+  onOpen?: (clipId: NodeId, origin: FilmStripOpenOrigin) => void;
+}>) {
   const graph = useGraph();
   const anchor = useSelectionAnchor();
   const selection = useSelectionActions();
@@ -138,6 +151,10 @@ export function BoardFilmStrip({ size }: Readonly<{ size: FilmStripSize }>) {
       onSelect={(id) => {
         const clipId = clipIds.get(id);
         if (clipId !== undefined) selection.set([clipId]);
+      }}
+      onOpen={(id, origin) => {
+        const clipId = clipIds.get(id);
+        if (clipId !== undefined) onOpen?.(clipId, origin);
       }}
     />
   );

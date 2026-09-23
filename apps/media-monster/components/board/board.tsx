@@ -34,7 +34,15 @@ import {
   readUnreadChildren,
 } from "@/lib/engine/fixture-document";
 import { BoardFilmStrip } from "./board-film-strip";
-import { BoardPreview, cardPicture, rectOf, type Rect } from "./board-preview";
+import {
+  BoardPreview,
+  cardPicture,
+  rectOf,
+  stripFrame,
+  stripFrameRect,
+  type Rect,
+} from "./board-preview";
+import type { FilmStripOpenOrigin } from "@storyboard/ui/film-strip";
 import { cardStill } from "./clip-still";
 import type { FilmStripSize } from "@storyboard/ui/film-strip";
 import {
@@ -914,7 +922,10 @@ function BoardBody({
   // exactly where it is on screen.
   const [preview, setPreview] = useState<{
     openedId: NodeId;
+    /** Where it was opened from, and so where it prefers to close back into. */
+    origin: "card" | "strip";
     from: Rect | null;
+    start: { clipId: NodeId; background: string | null; seconds: number; key: number } | null;
     stage: Rect;
     closing: boolean;
   } | null>(null);
@@ -947,20 +958,60 @@ function BoardBody({
     return { left: column.left, top, width: column.width, height: Math.max(0, bottom - top) };
   };
 
-  const openPreview = (id: NodeId) => {
-    selection.set([id]);
-    // Locked BEFORE measuring: the lock can hide the scrollbar, which moves
-    // everything, and the gutter class keeps its space when there was one.
+  // Locked BEFORE measuring: the lock can hide the scrollbar, which moves
+  // everything, and the gutter class keeps its space when there was one.
+  const lockPage = () => {
     const html = document.documentElement;
     if (html.scrollHeight > html.clientHeight) html.classList.add("board-preview-gutter");
     html.classList.add("board-preview-open");
+  };
+  const openPreview = (id: NodeId) => {
+    selection.set([id]);
+    lockPage();
     const card = cardPicture(id);
     setPreview({
       openedId: id,
+      origin: "card",
       from: card === null ? null : rectOf(card),
+      start: null,
       stage: measureStage(),
       closing: false,
     });
+  };
+  // FROM THE FILM STRIP: the same preview, grown out of the frame that was
+  // tapped and playing from the moment it was tapped at. Opened again while
+  // it is already up (another shot double-tapped), it stays where it is and
+  // only moves to the new shot and moment.
+  const openFromStrip = (id: NodeId, origin: FilmStripOpenOrigin) => {
+    selection.set([id]);
+    const start = {
+      clipId: id,
+      background: origin.frame?.style.background || null,
+      seconds: origin.seconds,
+      key: performance.now(),
+    };
+    if (preview !== null && !preview.closing) {
+      setPreview({ ...preview, openedId: id, start });
+      return;
+    }
+    lockPage();
+    setPreview({
+      openedId: id,
+      origin: "strip",
+      from: origin.frame === null ? null : stripFrameRect(origin.frame),
+      start,
+      stage: measureStage(),
+      closing: false,
+    });
+  };
+  // BACK WHERE IT CAME FROM when that is still on the page, else the other
+  // place the clip is drawn, else nowhere (it fades).
+  const returnTo = (id: NodeId): Rect | null => {
+    const card = cardPicture(id);
+    const frame = stripFrame(id);
+    const cardRect = card === null ? null : rectOf(card);
+    const frameRect = frame === null ? null : stripFrameRect(frame);
+    return preview?.origin === "strip" ? (frameRect ?? cardRect) : (cardRect ?? frameRect);
   };
   const closePreview = () =>
     setPreview((open) => (open === null || open.closing ? open : { ...open, closing: true }));
@@ -968,7 +1019,11 @@ function BoardBody({
     // Focus back on the card it closed into, as a dialog hands it back to the
     // button that opened it.
     if (previewedId !== null) {
-      cardPicture(previewedId)?.closest("button")?.focus({ preventScroll: true });
+      if (preview?.origin === "strip") {
+        document.querySelector<HTMLElement>("[data-seam-bar]")?.focus({ preventScroll: true });
+      } else {
+        cardPicture(previewedId)?.closest("button")?.focus({ preventScroll: true });
+      }
     }
     setPreview(null);
   };
@@ -1020,6 +1075,8 @@ function BoardBody({
         <BoardPreview
           clipId={previewedId}
           from={preview.from}
+          start={preview.start}
+          returnTo={returnTo}
           initialStage={preview.stage}
           measureStage={measureStage}
           closing={preview.closing}
@@ -1041,7 +1098,7 @@ function BoardBody({
           above are flex columns for this; see `app/page.tsx`. */}
       <div aria-hidden="true" className="min-h-6 flex-1" />
       <div ref={stripRef} className="sticky bottom-0 z-40 bg-zinc-950 pt-3 pb-4 max-md:-mx-2">
-        <BoardFilmStrip size={filmStripSize} />
+        <BoardFilmStrip size={filmStripSize} onOpen={openFromStrip} />
       </div>
     </>
   );

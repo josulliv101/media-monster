@@ -197,6 +197,19 @@ export const PLAYBAR_CSS = `.pb{
 }
 .pb .shot:hover .tag,.pb .shot.selected .tag{ opacity:1; transform:translateY(0); }
 .pb .shot.selected .tag{ border-color:rgba(56, 189, 248,.45); color:#c8fff4; }
+/* OPEN AND PLAY, on the selected box: the tag's twin, at the other corner. */
+.pb .shot .s-open{
+  position:absolute; z-index:3; top:6px; right:7px;
+  display:grid; place-items:center; width:24px; height:24px; padding:0;
+  border-radius:999px; cursor:pointer;
+  color:#c8fff4; background:rgba(8,10,14,.72);
+  border:1px solid rgba(56, 189, 248,.45);
+  backdrop-filter:blur(4px);
+  transition:background-color .18s ease, color .18s ease;
+}
+.pb .shot .s-open svg{ width:12px; height:12px; margin-left:1px; fill:currentColor; }
+.pb .shot .s-open:hover{ background:rgba(56, 189, 248,.9); color:#08090d; }
+.pb .shot .s-open:focus-visible{ outline:2px solid var(--signal); outline-offset:2px; }
 .pb .underline{
   position:absolute; bottom:-9px; height:3px; border-radius:2px;
   background:var(--signal);

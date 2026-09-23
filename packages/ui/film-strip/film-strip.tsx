@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
-import { TvMinimal } from "lucide-react";
+import { Play, TvMinimal } from "lucide-react";
 
 import {
   REFERENCE_SHOTS,
@@ -193,6 +193,18 @@ export type FilmStripProps = Readonly<{
   onTogglePlay?: () => void;
   onSelect?: (id: string) => void;
   /**
+   * OPEN A SHOT: a double-tap on its box, the play button on the selected box,
+   * or Enter on the bar. The strip only reports it; the caller decides what
+   * "open" shows.
+   *
+   * `origin.frame` is the thumbnail to grow a preview OUT OF: the one tapped,
+   * or the one under the playhead (else the first one on screen) when opened
+   * from the button or the keyboard. `origin.seconds` is where in the shot to
+   * start, measured from the start of its box: where the double-tap landed,
+   * or the playhead when it is inside the shot, else 0.
+   */
+  onOpen?: (id: string, origin: FilmStripOpenOrigin) => void;
+  /**
    * ON ITS OWN PAGE, or embedded in one.
    *
    * Standalone (the default) brings the reference's stage: the ink background,
@@ -213,6 +225,35 @@ export type FilmStripProps = Readonly<{
 
 export type FilmStripSize = "default" | "compact";
 
+export type FilmStripOpenOrigin = Readonly<{ frame: HTMLElement | null; seconds: number }>;
+
+/** Two taps on the same box within this long are a double-tap. */
+const DOUBLE_TAP_MS = 400;
+
+/**
+ * The thumbnail of `box` to open from: the one under `clientX` when given,
+ * else the first one that is actually on screen inside `viewport`.
+ */
+function frameIn(box: HTMLElement, viewport: HTMLElement | null, clientX: number | null): HTMLElement | null {
+  const frames = Array.from(box.querySelectorAll<HTMLElement>("[data-seam-thumbnail]"));
+  if (clientX !== null) {
+    const hit = frames.find((frame) => {
+      const r = frame.getBoundingClientRect();
+      return clientX >= r.left && clientX <= r.right;
+    });
+    if (hit !== undefined) return hit;
+  }
+  if (viewport !== null) {
+    const v = viewport.getBoundingClientRect();
+    const shown = frames.find((frame) => {
+      const r = frame.getBoundingClientRect();
+      return r.right > v.left && r.left < v.right;
+    });
+    if (shown !== undefined) return shown;
+  }
+  return frames[0] ?? null;
+}
+
 /** Seconds of scale kept built beyond each edge of the viewport, so a scroll
  *  has somewhere to go before the next measurement lands. */
 const RULER_MARGIN_SECONDS = 30;
@@ -232,6 +273,7 @@ export function FilmStrip({
   skimPreview,
   onTogglePlay,
   onSelect,
+  onOpen,
   standalone = true,
   size = "default",
   className,
@@ -290,6 +332,23 @@ export function FilmStrip({
     selfSelectedRef.current = shot.id;
     if (selectedId === undefined) setOwnSelectedId(shot.id);
     onSelect?.(shot.id);
+  };
+
+  // The last tap on a box, for telling a double-tap from two taps.
+  const lastTapRef = useRef<{ index: number; at: number } | null>(null);
+  /** Opens `index`'s shot. `clientX` is where it was tapped, if it was. */
+  const openShot = (index: number, clientX: number | null) => {
+    const shot = shots[index];
+    if (shot === undefined || onOpen === undefined) return;
+    const box = Array.from(
+      stripRef.current?.querySelectorAll<HTMLElement>("[data-seam-segment]") ?? [],
+    ).find((candidate) => candidate.dataset.seamSegment === shot.id);
+    const at = clientX === null ? timeRef.current : (secondsAtClientX(clientX) ?? shot.start);
+    const into = at >= shot.start && at < shot.end ? at - shot.start : 0;
+    onOpen(shot.id, {
+      frame: box === undefined ? null : frameIn(box, viewportRef.current, clientX),
+      seconds: into,
+    });
   };
 
   // A SELECTION FROM OUTSIDE MOVES THE PLAYHEAD TO IT, as if its box had been
@@ -975,6 +1034,23 @@ export function FilmStrip({
               />
             ))}
             <span className="tag">{shot.label}</span>
+            {/* THE WAY IN THAT CAN BE SEEN. A double-tap does the same, but
+                nothing on a box says it can be double-tapped. On the subject
+                only, like the trim handles, and kept out of the pan: a press
+                on it is a press on a button, not the start of a drag. */}
+            {selected && onOpen !== undefined ? (
+              <button
+                type="button"
+                data-seam-open={shot.id}
+                className="s-open"
+                aria-label={`Open ${shot.label}`}
+                title="Open and play"
+                onPointerDown={(event) => event.stopPropagation()}
+                onClick={() => openShot(index, null)}
+              >
+                <Play aria-hidden="true" />
+              </button>
+            ) : null}
             {!trimmable ? null : (
               <>
                 <i
@@ -1095,6 +1171,22 @@ export function FilmStrip({
       if (!pan.moved) {
         if (pan.shotIndex !== null) setSelected(pan.shotIndex);
         seekToClientX(event.clientX);
+        // A SECOND TAP ON THE SAME BOX, soon after the first, opens it. Counted
+        // here rather than from `dblclick`: pointer capture retargets the
+        // click events to the viewport, and a touch screen sends none.
+        const now = performance.now();
+        const last = lastTapRef.current;
+        if (
+          pan.shotIndex !== null &&
+          last !== null &&
+          last.index === pan.shotIndex &&
+          now - last.at <= DOUBLE_TAP_MS
+        ) {
+          lastTapRef.current = null;
+          openShot(pan.shotIndex, event.clientX);
+        } else {
+          lastTapRef.current = pan.shotIndex === null ? null : { index: pan.shotIndex, at: now };
+        }
       } else {
         // Held still before release: the hand stopped, so the strip should too.
         startMomentum(releaseVelocity(pan.velocity, performance.now() - pan.lastAt));
@@ -1246,6 +1338,12 @@ export function FilmStrip({
         return;
       }
       setTime((value) => clamp(value + (forward ? 1 : -1), 0, DUR));
+    } else if (event.key === "Enter" && onOpen !== undefined) {
+      const at = shots.findIndex((shot) => shot.id === activeId);
+      if (at >= 0) {
+        event.preventDefault();
+        openShot(at, null);
+      }
     } else if (event.key === "Home") {
       event.preventDefault();
       setTime(0);

@@ -17,6 +17,8 @@ import { cardStill } from "./clip-still";
  * preview is laid out at its final place and a FLIP animation starts it on top
  * of the card, so what you see is the card you clicked getting bigger. Closing
  * runs the same thing backwards, into wherever that clip's card is now. The
+ * film strip opens it the same way (`BoardBody.openFromStrip`), out of the
+ * frame that was tapped, and it closes back into the strip. The
  * tree behind fades while it is open (`BoardBody`), and stays mounted, so the
  * rows you had open are still open when you come back.
  *
@@ -51,6 +53,46 @@ export function cardPicture(id: NodeId): HTMLElement | null {
     if (element.dataset.clipPicture === id) return element;
   }
   return null;
+}
+
+/**
+ * The frame of `id`'s box in the film strip to grow out of or shrink back
+ * into: the one under the playhead, else the first one on screen.
+ */
+export function stripFrame(id: NodeId): HTMLElement | null {
+  const box = Array.from(document.querySelectorAll<HTMLElement>("[data-seam-segment]")).find(
+    (candidate) => candidate.dataset.seamSegment === id,
+  );
+  if (box === undefined) return null;
+  const frames = Array.from(box.querySelectorAll<HTMLElement>("[data-seam-thumbnail]"));
+  const playhead = document.querySelector("[data-seam-playhead]")?.getBoundingClientRect();
+  const viewport = document.querySelector("[data-seam-viewport]")?.getBoundingClientRect();
+  const under =
+    playhead === undefined
+      ? undefined
+      : frames.find((frame) => {
+          const r = frame.getBoundingClientRect();
+          return playhead.left >= r.left && playhead.left <= r.right;
+        });
+  const shown =
+    viewport === undefined
+      ? undefined
+      : frames.find((frame) => {
+          const r = frame.getBoundingClientRect();
+          return r.right > viewport.left && r.left < viewport.right;
+        });
+  return under ?? shown ?? frames[0] ?? null;
+}
+
+/**
+ * A strip frame as a 16:9 rect: its height, centred on it. The frames are not
+ * 16:9 (a box's width is its duration, cut into frames), and growing a
+ * non-16:9 rect into the preview would stretch the picture on the way.
+ */
+export function stripFrameRect(frame: Element): Rect {
+  const r = rectOf(frame);
+  const width = (r.height * 16) / 9;
+  return { left: r.left + (r.width - width) / 2, top: r.top, width, height: r.height };
 }
 
 /** The largest 16:9 box that fits in `stage`, centred in it. The card's
@@ -105,6 +147,8 @@ function play(
 export function BoardPreview({
   clipId,
   from,
+  start,
+  returnTo,
   initialStage,
   measureStage,
   closing,
@@ -117,6 +161,18 @@ export function BoardPreview({
   /** Where the card's picture was when it was clicked; `null` if it was not on
    *  the page (it then simply appears). */
   from: Rect | null;
+  /**
+   * How the open looked and where to play from, when it was opened from the
+   * film strip: the strip frame's own background (so the zoom starts on the
+   * very picture it came from) and the moment in the shot to start at. Only
+   * for `start.clipId`; a clip picked afterwards starts from its card still
+   * and its first frame. `key` is new for every open, so opening the same
+   * shot again seeks again.
+   */
+  start: Readonly<{ clipId: NodeId; background: string | null; seconds: number; key: number }> | null;
+  /** Where to shrink back to on close, for the clip then shown, or `null` to
+   *  fade out where it is. */
+  returnTo: (id: NodeId) => Rect | null;
   /** The stage when it opened, measured in the same click. */
   initialStage: Rect;
   /** Measures the stage again, for when the window changes size. */
@@ -166,9 +222,9 @@ export function BoardPreview({
       onClosed();
       return;
     }
-    const card = cardPicture(clipId);
+    const to = returnTo(clipId);
     const keyframes: Keyframe[] =
-      card === null
+      to === null
         ? [
             { opacity: 1, transform: "none" },
             // Shrinks about its centre; the box's own origin is its corner.
@@ -177,7 +233,7 @@ export function BoardPreview({
               transform: `translate(${fit(stage).width * 0.03}px, ${fit(stage).height * 0.03}px) scale(0.94)`,
             },
           ]
-        : [{ transform: "none" }, { transform: covering(rectOf(card), fit(stage)) }];
+        : [{ transform: "none" }, { transform: covering(to, fit(stage)) }];
     return play(element, keyframes, CLOSE_MS, onClosed);
     // The close is started once; later renders must not restart it.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -193,6 +249,13 @@ export function BoardPreview({
   }, [closing, onClose]);
 
   const still = clip === null ? null : cardStill(clip.media, clip.seconds);
+  const startHere = start !== null && start.clipId === clipId ? start : null;
+  // BLACK BEHIND THE VIDEO ONLY ONCE IT HAS A FRAME. Before that the still
+  // underneath has to show through, or opening would flash to black while the
+  // video loads; after, the letterbox of a clip that is not 16:9 must be black
+  // rather than the edges of a still cropped to 16:9.
+  const [readyFor, setReadyFor] = useState<string | null>(null);
+  const videoKey = `${clipId}:${startHere?.key ?? 0}`;
   // The real media only once the zoom has landed, and not while it shrinks
   // back: the card shows the still, so the still is what goes back into it.
   const showFull = landed && !closing && clip !== null && clip.media !== null;
@@ -223,7 +286,9 @@ export function BoardPreview({
           transformOrigin: "0 0",
         }}
       >
-        {still === null ? (
+        {startHere?.background ? (
+          <div className="absolute inset-0" style={{ background: startHere.background }} />
+        ) : still === null ? (
           <div className="grid size-full place-items-center text-sm text-zinc-600">No media</div>
         ) : (
           // eslint-disable-next-line @next/next/no-img-element -- the card's own cached still
@@ -232,13 +297,21 @@ export function BoardPreview({
         {showFull && clip.media !== null ? (
           clip.media.kind === "video" ? (
             <video
-              key={clipId}
+              key={videoKey}
               src={clip.media.src}
-              poster={still ?? undefined}
               controls
               autoPlay
               playsInline
-              className="absolute inset-0 size-full bg-black object-contain"
+              onLoadedMetadata={(event) => {
+                const at = startHere?.seconds ?? 0;
+                const video = event.currentTarget;
+                if (at > 0.05) video.currentTime = Math.min(at, Math.max(0, video.duration - 0.05));
+              }}
+              onLoadedData={() => setReadyFor(videoKey)}
+              className={cn(
+                "absolute inset-0 size-full object-contain",
+                readyFor === videoKey && "bg-black",
+              )}
             />
           ) : (
             // eslint-disable-next-line @next/next/no-img-element -- a Cloudinary transform is already the optimised image
