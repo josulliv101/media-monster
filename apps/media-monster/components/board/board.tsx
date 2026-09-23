@@ -12,6 +12,7 @@ import {
 } from "react";
 import {
   documentOrder,
+  getChildren,
   getNode,
   getParent,
   parseNodeId,
@@ -20,7 +21,17 @@ import {
 } from "@josulliv101/nested-collections";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { ChevronRight, Film, GripVertical, Layers, LogIn, Redo2, Undo2 } from "lucide-react";
+import {
+  ArrowDown,
+  ArrowUp,
+  ChevronRight,
+  Film,
+  GripVertical,
+  Layers,
+  LogIn,
+  Redo2,
+  Undo2,
+} from "lucide-react";
 
 import {
   NodeSlot,
@@ -420,9 +431,67 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
     title: parentOff ? `Off because ${branch.offByName ?? "a collection above"} is off` : undefined,
     onSelect: toggleActive,
   };
-  const menuActions: readonly RowAction[] = [activeAction];
+  // MOVE UP AND DOWN, the keyboard's way to reorder rows (a drag is the
+  // pointer's). Past the neighbouring ROW at the same level, not past a clip:
+  // the rows are what you are looking at in a list of rows, and in the row
+  // layout clips are not even drawn among them. Through `resolveDrop`, like a
+  // drop, so it is one undoable step. Not on the row the board is showing,
+  // which has no visible siblings to pass.
+  const moveParentId = getParent(graph, id);
+  const siblings = moveParentId === null ? [] : getChildren(graph, moveParentId);
+  const isRow = (childId: NodeId) => {
+    const child = getNode(graph, childId);
+    return child !== undefined && !child.sealed && child.kind === "collection";
+  };
+  const here = siblings.indexOf(id);
+  const rowAbove = siblings.slice(0, Math.max(0, here)).findLast(isRow) ?? null;
+  const rowBelow = siblings.slice(here + 1).find(isRow) ?? null;
+  const nameOf = (rowId: NodeId) => {
+    const row = getNode(graph, rowId);
+    return row !== undefined && !row.sealed && row.kind === "collection" ? row.data.name : "the next row";
+  };
+  const moveTo = (toIndexBefore: number) => {
+    if (moveParentId === null) return;
+    const command = store.resolveDrop({
+      type: "move",
+      nodeIds: [id],
+      toParentId: moveParentId,
+      toIndexBefore,
+    });
+    if (command.ok) store.dispatch(command.value);
+    else setRejection(`${command.error.code}: ${command.error.message}`);
+  };
+  const moveActions: readonly RowAction[] = isRoot
+    ? []
+    : [
+        {
+          id: "move-up",
+          label: "Move up",
+          hint: rowAbove === null ? "Already first" : `Before ${nameOf(rowAbove)}`,
+          icon: <ArrowUp className="size-4" />,
+          disabled: rowAbove === null,
+          keepOpen: true,
+          onSelect: () => {
+            if (rowAbove !== null) moveTo(siblings.indexOf(rowAbove));
+          },
+        },
+        {
+          id: "move-down",
+          label: "Move down",
+          hint: rowBelow === null ? "Already last" : `After ${nameOf(rowBelow)}`,
+          icon: <ArrowDown className="size-4" />,
+          disabled: rowBelow === null,
+          keepOpen: true,
+          onSelect: () => {
+            if (rowBelow !== null) moveTo(siblings.indexOf(rowBelow) + 1);
+          },
+        },
+      ];
+  const menuActions: readonly RowAction[] = [activeAction, ...moveActions];
+  // THE PHONE'S TRAY keeps to Go to and Active: a phone moves rows by the grip,
+  // and four buttons would push the row nearly off the screen to show them.
   const trayActions: readonly RowAction[] = isRoot
-    ? menuActions
+    ? [activeAction]
     : [
         {
           id: "go-to",
@@ -430,7 +499,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
           icon: <LogIn className="size-4" />,
           onSelect: () => focus(id),
         },
-        ...menuActions,
+        activeAction,
       ];
   // THE REAL ROOT IS NOT DRAWN AS A BOX. It is the board itself — the page's
   // heading names it and the toolbar carries its running time — so its
