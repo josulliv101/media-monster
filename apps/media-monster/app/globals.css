@@ -198,23 +198,23 @@ html.board-preview-gutter {
   scrollbar-gutter: stable;
 }
 
-/* DRAGGING A ROW (`components/board/row-drag.tsx`): the grabbing hand wherever
+/* DRAGGING A ROW OR A CLIP (`components/board/board-drag.tsx`): the grabbing hand wherever
    the pointer goes, a not-allowed one over a spot the engine refuses, and no
    text selection on the way. Classes on <html> rather than inline styles, so
    the cursor holds over every element the pointer crosses. */
-html.row-dragging,
-html.row-dragging * {
+html.board-dragging,
+html.board-dragging * {
   cursor: grabbing !important;
   user-select: none;
 }
-html.row-dragging.row-drag-refused,
-html.row-dragging.row-drag-refused * {
+html.board-dragging.board-drag-refused,
+html.board-dragging.board-drag-refused * {
   cursor: not-allowed !important;
 }
 
 /* THE ROWS PART: the drop placeholder grows open, pushing what follows it
    down, rather than appearing at full height in one frame. */
-@keyframes row-drop-placeholder-open {
+@keyframes drop-placeholder-open {
   from {
     height: 0;
     opacity: 0;
@@ -224,11 +224,27 @@ html.row-dragging.row-drag-refused * {
     opacity: 1;
   }
 }
-.row-drop-placeholder {
-  animation: row-drop-placeholder-open 140ms ease-out;
+.drop-placeholder {
+  animation: drop-placeholder-open 140ms ease-out;
+}
+/* A clip's slot opens among the cards by fading and growing in place; a
+   grid cell has no height to animate from. */
+@keyframes drop-placeholder-card-open {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+.drop-placeholder-card {
+  animation: drop-placeholder-card-open 140ms ease-out;
 }
 @media (prefers-reduced-motion: reduce) {
-  .row-drop-placeholder {
+  .drop-placeholder,
+  .drop-placeholder-card {
     animation: none;
   }
 }

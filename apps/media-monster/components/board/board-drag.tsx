@@ -8,21 +8,27 @@ import { useStore } from "@/lib/engine/bindings";
 import { isUnread, readCollection } from "./read-collection";
 
 /**
- * DRAGGING A ROW to anywhere in the tree: between two rows at any depth, into
- * any row (a child row included, making the dragged row its child), or out and
- * up past the end of the row it is in.
+ * DRAGGING A ROW OR A CLIP to anywhere in the tree: between two rows or two
+ * clips at any depth, into any row (a child row included, making the dragged
+ * thing its child), or out and up past the end of the row it is in. Rows and
+ * clips move by the same rules, the same targets and the same engine check;
+ * only the placeholder's shape differs (`dragKind`).
  *
- * PICKED UP BY THE GRIP at the far right of the row, and nowhere else: the bar
- * already means open-or-close, and on a phone a sideways drag on the bar is the
- * swipe. The grip takes the whole gesture (`touch-action: none`).
+ * PICKED UP BY THE GRIP — at the far right of a row's bar, at the bottom right
+ * of a clip card — and nowhere else: a row's bar already means open-or-close
+ * (and on a phone, a sideways drag on it is the swipe), and a card already
+ * means "open the preview". The grip takes the whole gesture
+ * (`touch-action: none`).
  *
  * WHERE IT WILL LAND IS SHOWN BY THE ROWS PARTING: a dashed placeholder opens
  * at that spot, at that depth, and the rows below slide down to make room
- * (`RowDropPlaceholder`, drawn by the collection that will receive it). Into a
+ * (`DropPlaceholder`, drawn by the collection that will receive it). Into a
  * closed row, where there is no list to open a gap in, that row is ringed
  * instead. The row being dragged stays where it is, faded, until it lands.
  *
- * WHERE THE POINTER IS decides the target, read off the row under it:
+ * WHERE THE POINTER IS decides the target, read off what is under it:
+ *   - a clip card: before it on its left half, after it on its right, among
+ *     its siblings (cards run left to right);
  *   - anywhere on a row's bar: INTO that row, at the end of what it holds,
  *     except a thin strip along its edges (`EDGE_BAND_PX`):
  *   - the top strip, or the gap just above the bar: before that row, among its
@@ -55,36 +61,52 @@ import { isUnread, readCollection } from "./read-collection";
  * move is one undoable step.
  */
 
-export type RowDropTarget = Readonly<{
+export type DropTarget = Readonly<{
   parentId: NodeId;
   /** Among the parent's children as they stand NOW, the dragged row included. */
   index: number;
   kind: "between" | "into";
 }>;
 
-type RowDragState = Readonly<{
+export type DragKind = "row" | "clip";
+
+type BoardDragState = Readonly<{
   dragId: NodeId | null;
   dragName: string;
-  target: RowDropTarget | null;
+  /** What is being dragged, which decides the placeholder's shape: a full-width
+   *  bar for a row, a card-sized slot among the cards for a clip. */
+  dragKind: DragKind;
+  target: DropTarget | null;
   /** Where the pointer was when the drag began, for the label's first frame;
    *  after that the label is moved by hand, not by rendering. */
   startAt: Readonly<{ x: number; y: number }>;
 }>;
 
-type RowDragValue = Readonly<{
-  state: RowDragState;
-  start: (id: NodeId, name: string, event: React.PointerEvent<HTMLElement>) => void;
+type BoardDragValue = Readonly<{
+  state: BoardDragState;
+  start: (
+    id: NodeId,
+    name: string,
+    kind: DragKind,
+    event: React.PointerEvent<HTMLElement>,
+  ) => void;
 }>;
 
-const IDLE: RowDragState = { dragId: null, dragName: "", target: null, startAt: { x: 0, y: 0 } };
+const IDLE: BoardDragState = {
+  dragId: null,
+  dragName: "",
+  dragKind: "row",
+  target: null,
+  startAt: { x: 0, y: 0 },
+};
 
-const RowDragContext = createContext<RowDragValue>({
+const BoardDragContext = createContext<BoardDragValue>({
   state: IDLE,
   start: () => undefined,
 });
 
-export function useRowDrag(): RowDragValue {
-  return use(RowDragContext);
+export function useBoardDrag(): BoardDragValue {
+  return use(BoardDragContext);
 }
 
 /** The strip along a bar's top (and a closed bar's bottom) that means "beside"
@@ -99,7 +121,7 @@ const MAX_SCROLL_PX_PER_FRAME = 18;
 
 type Candidate = Readonly<{ parentId: NodeId; index: number; kind: "between" | "into" }>;
 
-function sameTarget(a: RowDropTarget | null, b: RowDropTarget | null): boolean {
+function sameTarget(a: DropTarget | null, b: DropTarget | null): boolean {
   return (
     a === b ||
     (a !== null &&
@@ -110,16 +132,16 @@ function sameTarget(a: RowDropTarget | null, b: RowDropTarget | null): boolean {
   );
 }
 
-export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>) {
+export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }>) {
   const store = useStore();
-  const [state, setState] = useState<RowDragState>(IDLE);
+  const [state, setState] = useState<BoardDragState>(IDLE);
   // Why the spot under the pointer takes nothing: refused outright, or a
   // collection being read so that it can.
   const [refused, setRefused] = useState<"no" | "refused" | "reading">("no");
-  const stateRef = useRef<RowDragState>(IDLE);
+  const stateRef = useRef<BoardDragState>(IDLE);
   const labelRef = useRef<HTMLDivElement>(null);
 
-  const publish = (next: RowDragState) => {
+  const publish = (next: BoardDragState) => {
     stateRef.current = next;
     setState(next);
   };
@@ -130,7 +152,7 @@ export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>)
   const candidateAt = (x: number, y: number): Candidate | "keep" | null => {
     const hit = document.elementFromPoint(x, y);
     if (hit === null || hit.closest("[data-board-tree]") === null) return null;
-    if (hit.closest("[data-row-placeholder]") !== null) return "keep";
+    if (hit.closest("[data-drop-placeholder]") !== null) return "keep";
     const graph = store.getGraph();
     const siblingSpot = (id: NodeId, after: boolean): Candidate | "keep" => {
       const parentId = getParent(graph, id);
@@ -144,6 +166,12 @@ export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>)
       kind: "into",
     });
 
+    // A CARD: before it or after it, by which half the pointer is on.
+    const card = hit.closest<HTMLElement>("[data-clip-drop]");
+    if (card !== null) {
+      const box = card.getBoundingClientRect();
+      return siblingSpot(card.dataset.clipDrop as NodeId, x > box.left + box.width / 2);
+    }
     const header = hit.closest<HTMLElement>("[data-row-header]");
     if (header !== null) {
       const id = header.dataset.rowHeader as NodeId;
@@ -178,7 +206,7 @@ export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>)
   const judge = (
     dragId: NodeId,
     candidate: Candidate,
-  ): RowDropTarget | "stay" | "refused" | "unread" => {
+  ): DropTarget | "stay" | "refused" | "unread" => {
     if (candidate.kind === "into" && isUnread(store.getGraph(), candidate.parentId)) {
       return "unread";
     }
@@ -192,7 +220,12 @@ export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>)
     return resolved.error.code === "empty-command" ? "stay" : "refused";
   };
 
-  const start = (id: NodeId, name: string, event: React.PointerEvent<HTMLElement>) => {
+  const start = (
+    id: NodeId,
+    name: string,
+    kind: DragKind,
+    event: React.PointerEvent<HTMLElement>,
+  ) => {
     if (!event.isPrimary || event.button !== 0 || stateRef.current.dragId !== null) return;
     // The grip's own gesture: not a swipe of the row, not a text selection.
     event.stopPropagation();
@@ -221,7 +254,7 @@ export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>)
     const retarget = () => {
       const candidate = candidateAt(lastX, lastY);
       if (candidate === "keep") return;
-      let next: RowDropTarget | null = null;
+      let next: DropTarget | null = null;
       let why: "no" | "refused" | "reading" = "no";
       if (candidate !== null) {
         const verdict = judge(id, candidate);
@@ -238,7 +271,7 @@ export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>)
         } else if (verdict !== "stay") next = verdict;
       }
       setRefused(why);
-      document.documentElement.classList.toggle("row-drag-refused", why === "refused");
+      document.documentElement.classList.toggle("board-drag-refused", why === "refused");
       if (!sameTarget(next, stateRef.current.target)) {
         publish({ ...stateRef.current, target: next });
       }
@@ -274,7 +307,7 @@ export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>)
       window.removeEventListener("pointercancel", onCancel);
       window.removeEventListener("keydown", onKey, true);
       cancelAnimationFrame(frame);
-      document.documentElement.classList.remove("row-dragging", "row-drag-refused");
+      document.documentElement.classList.remove("board-dragging", "board-drag-refused");
       const target = stateRef.current.target;
       if (commit && dragging && target !== null) {
         const resolved = store.resolveDrop({
@@ -296,8 +329,14 @@ export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>)
       if (!dragging) {
         if (Math.hypot(lastX - startX, lastY - startY) < START_PX) return;
         dragging = true;
-        document.documentElement.classList.add("row-dragging");
-        publish({ dragId: id, dragName: name, target: null, startAt: { x: lastX, y: lastY } });
+        document.documentElement.classList.add("board-dragging");
+        publish({
+          dragId: id,
+          dragName: name,
+          dragKind: kind,
+          target: null,
+          startAt: { x: lastX, y: lastY },
+        });
         frame = requestAnimationFrame(scroll);
       }
       place(lastX, lastY);
@@ -324,13 +363,13 @@ export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>)
   };
 
   return (
-    <RowDragContext value={{ state, start }}>
+    <BoardDragContext value={{ state, start }}>
       {children}
       {state.dragId === null ? null : (
         <div
           ref={labelRef}
           aria-hidden="true"
-          data-row-drag-label
+          data-drag-label
           style={{ transform: `translate(${state.startAt.x + 14}px, ${state.startAt.y + 10}px)` }}
           className="pointer-events-none fixed top-0 left-0 z-50 flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900/95 px-3 py-1.5 text-sm font-semibold text-zinc-100 shadow-xl shadow-black/50"
         >
@@ -343,20 +382,34 @@ export function RowDragProvider({ children }: Readonly<{ children: ReactNode }>)
           ) : null}
         </div>
       )}
-    </RowDragContext>
+    </BoardDragContext>
   );
 }
 
 /**
- * THE GAP THE ROWS PART AROUND: where the dragged row will land, at the depth
- * it will land. Drawn by the collection that will receive it, among its
- * children, so everything after it moves down to make room.
+ * THE GAP THE BOARD PARTS AROUND: where the dragged thing will land, at the
+ * depth it will land. Drawn by the collection that will receive it, among its
+ * children, so everything after it moves along to make room: a full-width bar
+ * for a row, a card-sized slot among the cards for a clip.
  */
-export function RowDropPlaceholder({ name }: Readonly<{ name: string }>) {
+export function DropPlaceholder({ name, kind }: Readonly<{ name: string; kind: DragKind }>) {
+  if (kind === "clip") {
+    return (
+      <div
+        data-drop-placeholder
+        className="drop-placeholder-card flex flex-col overflow-hidden rounded-lg border-2 border-dashed border-sky-400/60 bg-sky-400/10 text-sky-300"
+      >
+        <div className="grid aspect-video place-items-center px-3 text-center text-sm">
+          <span className="line-clamp-2">{name}</span>
+        </div>
+        <div className="px-3 py-2 text-xs text-sky-300/80">lands here</div>
+      </div>
+    );
+  }
   return (
     <div
-      data-row-placeholder
-      className="row-drop-placeholder col-span-full flex h-12 items-center rounded-xl border-2 border-dashed border-sky-400/60 bg-sky-400/10 px-4 text-sm text-sky-300"
+      data-drop-placeholder
+      className="drop-placeholder col-span-full flex h-12 items-center rounded-xl border-2 border-dashed border-sky-400/60 bg-sky-400/10 px-4 text-sm text-sky-300"
     >
       <span className="truncate">{name} lands here</span>
     </div>
