@@ -34,6 +34,7 @@ import {
   readUnreadChildren,
 } from "@/lib/engine/fixture-document";
 import { BoardFilmStrip } from "./board-film-strip";
+import { RowMenu } from "./row-menu";
 import {
   BoardPreview,
   cardPicture,
@@ -115,14 +116,28 @@ function formatSeconds(total: number): string {
 function Duration({
   value,
   certainty,
-}: Readonly<{ value: number; certainty: "exact" | "estimated" | "partial" }>) {
+  quiet = false,
+}: Readonly<{
+  value: number;
+  certainty: "exact" | "estimated" | "partial";
+  /** Dimmer, for a duration riding along beside something more important
+   *  (a row's name). An estimate stays amber, just fainter: that colour is
+   *  what says the number is not a measurement. */
+  quiet?: boolean;
+}>) {
   const prefix =
     certainty === "exact" ? "" : certainty === "estimated" ? "about " : "at least ";
   return (
     <span
       className={cn(
         "tabular-nums",
-        certainty === "exact" ? "text-zinc-400" : "text-amber-400/90",
+        certainty === "exact"
+          ? quiet
+            ? "text-zinc-500"
+            : "text-zinc-400"
+          : quiet
+            ? "text-amber-400/70"
+            : "text-amber-400/90",
       )}
       title={
         certainty === "exact"
@@ -339,8 +354,8 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
 }
 
 /**
- * The on/off switch a row wears: a track, and a knob that slides right when on.
- * Drawn only; the button around it owns the semantics.
+ * The on/off switch in a row's menu: a track, and a knob that slides right when on.
+ * Drawn only; the menu item around it owns the semantics.
  */
 function SwitchTrack({ on }: Readonly<{ on: boolean }>) {
   return (
@@ -585,8 +600,8 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
         isRoot || isTopLevel ? "rounded-xl" : "rounded-l-xl border-r-0 pr-0 md:pr-0",
       )}
     >
-      {/* THE WHOLE BAR TOGGLES: name, duration and the space between them are
-          one button. It bleeds 6px into the card's padding on three sides
+      {/* THE WHOLE BAR TOGGLES: icon, name, duration, triangle and the space
+          after them are one button. It bleeds 6px into the card's padding on three sides
           (block boxes, so the negative margins widen the bar rather than
           shrinking anything's natural width) and pads back by the same 6px,
           so the text sits exactly where the padding put it. The hover tint and
@@ -594,16 +609,19 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
       <header
         className={cn("-mx-1.5 -mt-1.5 flex items-stretch gap-1", collapsed ? "-mb-1.5" : "mb-0.5")}
       >
-        <h3 className="min-w-0 flex-1 text-sm font-semibold text-zinc-100">
+        <h3 className="min-w-0 flex-1 text-lg font-semibold text-zinc-100">
           <button
             type="button"
             aria-expanded={!collapsed}
             aria-controls={bodyId}
             data-collection-toggle
             onClick={() => setCollapsed((was) => !was)}
-            className="group flex w-full items-baseline justify-between gap-3 rounded-lg px-1.5 py-1.5 text-left transition-colors hover:bg-zinc-800/60 focus-visible:bg-zinc-800/60 focus-visible:outline-2 focus-visible:outline-sky-500"
+            className="group flex w-full items-center gap-3 rounded-lg px-1.5 py-3 text-left transition-colors hover:bg-zinc-800/60 focus-visible:bg-zinc-800/60 focus-visible:outline-2 focus-visible:outline-sky-500"
           >
-            <span className="flex min-w-0 items-center gap-1.5">
+            {/* BASELINE, so the small duration sits on the name's line rather
+                than centred against its taller box; the icon and the triangle
+                centre themselves. */}
+            <span className="flex min-w-0 items-baseline gap-2">
               {/* IN THE STRIP OR NOT, AT A GLANCE, first in the row. One slot,
                   the same size in both states so the names line up down the
                   board: a white film icon on a small solid blue chip while this
@@ -619,7 +637,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
               <span
                 aria-hidden="true"
                 className={cn(
-                  "mr-1 flex size-5 shrink-0 items-center justify-center rounded-md",
+                  "mr-1 flex size-6 shrink-0 items-center justify-center self-center rounded-md",
                   on ? "bg-sky-500" : null,
                 )}
               >
@@ -627,30 +645,32 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
                   // Turned a quarter so the film runs SIDEWAYS, like the strip at the
                   // bottom of the board: sprocket holes top and bottom, not left
                   // and right.
-                  <Film data-collection-in-cut className="size-3 rotate-90 text-white" />
+                  <Film data-collection-in-cut className="size-3.5 rotate-90 text-white" />
                 ) : (
-                  <Layers data-collection-out-of-cut className="size-3.5 text-zinc-300" />
+                  <Layers data-collection-out-of-cut className="size-4 text-zinc-300" />
                 )}
               </span>
               <span className="truncate">{data.name}</span>
-              {/* AFTER THE NAME. Points right when closed and down when open;
-                  brightens with the bar on hover and focus. */}
+              {/* THE DURATION RIDES WITH THE NAME, small and quiet: it is
+                  about the row, but the name is what you read. */}
+              {total ? (
+                <span className="shrink-0 text-xs font-normal">
+                  <Duration value={total.value} certainty={total.certainty} quiet />
+                </span>
+              ) : null}
+              {/* AFTER THE NAME AND ITS DURATION. Points right when closed and
+                  down when open; brightens with the bar on hover and focus. */}
               <svg
                 viewBox="0 0 10 10"
                 aria-hidden="true"
                 className={cn(
-                  "size-2.5 shrink-0 fill-zinc-500 transition-[rotate,fill] duration-150 group-hover:fill-zinc-100 group-focus-visible:fill-zinc-100 motion-reduce:transition-none",
+                  "ml-0.5 size-3 shrink-0 self-center fill-zinc-500 transition-[rotate,fill] duration-150 group-hover:fill-zinc-100 group-focus-visible:fill-zinc-100 motion-reduce:transition-none",
                   collapsed ? null : "rotate-90",
                 )}
               >
                 <path d="M2.5 1 L8.5 5 L2.5 9 Z" />
               </svg>
             </span>
-            {total ? (
-              <span className="shrink-0 text-base font-normal">
-                <Duration value={total.value} certainty={total.certainty} />
-              </span>
-            ) : null}
           </button>
         </h3>
         {/* GO TO: make this collection the top of the board. Its own button
@@ -671,32 +691,39 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
             <LogIn className="size-4" aria-hidden="true" />
           </button>
         )}
-        {/* IN THE CUT OR NOT, for this whole branch. Its own control beside
-            the bar, for the reason "go to" is: the bar means open or close.
-            Disabled, and shown off, while a row above is off.
-
-            LAST IN THE ROW, so every switch sits against its box's right edge.
-            Before "go to" it was pushed left by that icon on every row but the
-            top one, which has no icon — a 49px stagger down the right side. */}
-        <button
-          type="button"
-          role="switch"
-          aria-checked={on}
-          aria-label={`Active: ${data.name}`}
-          disabled={parentOff}
-          title={
-            parentOff
-              ? `Off because ${branch.offByName ?? "a collection above"} is off`
-              : on
-                ? `${data.name} is in the film strip. Switch off to take it out.`
-                : `${data.name} is out of the film strip. Switch on to put it back.`
-          }
-          data-collection-active
-          onClick={toggleActive}
-          className="flex shrink-0 items-center rounded-lg px-1.5 transition-colors hover:bg-zinc-800/60 focus-visible:outline-2 focus-visible:outline-sky-500 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-        >
-          <SwitchTrack on={on} />
-        </button>
+        {/* THE ROW'S MENU, last in the row so every ⋮ sits against its box's
+            right edge (see `row-menu.tsx`). Its one item for now is the switch
+            that puts this whole branch in the film strip or takes it out:
+            disabled, and shown off, while a row above is off. The menu stays
+            open when it is flipped, so the switch is seen to move. */}
+        <RowMenu label={data.name}>
+          <button
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={on}
+            disabled={parentOff}
+            title={
+              parentOff
+                ? `Off because ${branch.offByName ?? "a collection above"} is off`
+                : undefined
+            }
+            data-collection-active
+            onClick={toggleActive}
+            className="flex w-full items-center justify-between gap-6 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-zinc-800 focus-visible:bg-zinc-800 focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+          >
+            <span className="flex min-w-0 flex-col">
+              <span className="text-sm text-zinc-100">Active</span>
+              <span className="text-xs text-zinc-500">
+                {parentOff
+                  ? `Off because ${branch.offByName ?? "a collection above"} is off`
+                  : on
+                    ? "In the film strip"
+                    : "Not in the film strip"}
+              </span>
+            </span>
+            <SwitchTrack on={on} />
+          </button>
+        </RowMenu>
       </header>
 
       {/* Always in the DOM so `aria-controls` names something; its contents
