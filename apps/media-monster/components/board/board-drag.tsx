@@ -127,33 +127,59 @@ const LABEL_MARGIN_PX = 8;
 /** Above a finger by this much, so the thumb doesn't cover it. */
 const LABEL_ABOVE_TOUCH_PX = 28;
 
+/** Which side of the pointer the drag label is on, chosen once per drag. */
+type LabelSide = Readonly<{ left: boolean; above: boolean }>;
+
 /**
- * WHERE THE DRAG LABEL GOES: beside the pointer, but always on screen.
+ * WHICH SIDE OF THE POINTER THE DRAG LABEL GOES, decided ONCE, when it first
+ * appears, and kept for the whole drag: a label that jumped from one side of
+ * the pointer to the other as it neared an edge was one more thing moving.
  *
- * It sat to the right of the pointer and below it, and every grip is at the
- * far right of its row or card, so dragging a row put the label off the right
- * edge of the window, where nobody saw it. Now it flips to the pointer's left
- * when there is no room on the right, above when there is none below, and is
- * held inside the window either way. On a touch screen it goes above the
- * finger, which would otherwise cover it.
+ * Right of and below the pointer when there is room at the start, which is
+ * where it always sat. Every grip is at the far right of its row or card,
+ * though, and there it went off the right edge of the window, where nobody saw
+ * it; so a drag that starts without room on the right puts it on the left, and
+ * one without room below puts it above. On a touch screen it goes above, where
+ * the finger does not cover it.
+ */
+function labelSide(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  touch: boolean,
+): LabelSide {
+  const right = document.documentElement.clientWidth - LABEL_MARGIN_PX;
+  const bottom = window.innerHeight - LABEL_MARGIN_PX;
+  return {
+    left: x + LABEL_GAP_PX + width > right,
+    above: touch || y + LABEL_GAP_PX + height > bottom,
+  };
+}
+
+/**
+ * The label's position on its chosen side of the pointer. Held inside the
+ * window as the pointer nears an edge — it slides along it, it does not swap
+ * sides.
  */
 function labelSpot(
   x: number,
   y: number,
   width: number,
   height: number,
+  side: LabelSide,
   touch: boolean,
 ): Readonly<{ left: number; top: number }> {
   const right = document.documentElement.clientWidth - LABEL_MARGIN_PX;
   const bottom = window.innerHeight - LABEL_MARGIN_PX;
-  let left = x + LABEL_GAP_PX;
-  if (left + width > right) left = x - LABEL_GAP_PX - width;
-  left = Math.max(LABEL_MARGIN_PX, Math.min(left, right - width));
-  let top = touch ? y - height - LABEL_ABOVE_TOUCH_PX : y + LABEL_GAP_PX;
-  if (top + height > bottom) top = y - height - LABEL_GAP_PX;
-  if (top < LABEL_MARGIN_PX) top = y + LABEL_ABOVE_TOUCH_PX;
-  top = Math.max(LABEL_MARGIN_PX, Math.min(top, bottom - height));
-  return { left, top };
+  const left = side.left ? x - LABEL_GAP_PX - width : x + LABEL_GAP_PX;
+  const top = side.above
+    ? y - height - (touch ? LABEL_ABOVE_TOUCH_PX : LABEL_GAP_PX)
+    : y + LABEL_GAP_PX;
+  return {
+    left: Math.max(LABEL_MARGIN_PX, Math.min(left, right - width)),
+    top: Math.max(LABEL_MARGIN_PX, Math.min(top, bottom - height)),
+  };
 }
 
 function sameTarget(a: DropTarget | null, b: DropTarget | null): boolean {
@@ -175,6 +201,8 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
   const [refused, setRefused] = useState<"no" | "refused" | "reading">("no");
   const stateRef = useRef<BoardDragState>(IDLE);
   const labelRef = useRef<HTMLDivElement>(null);
+  // The side the label took when this drag's label first appeared (above).
+  const sideRef = useRef<LabelSide | null>(null);
 
   const publish = (next: BoardDragState) => {
     stateRef.current = next;
@@ -285,7 +313,10 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
     const place = (x: number, y: number) => {
       const label = labelRef.current;
       if (label === null) return;
-      const spot = labelSpot(x, y, label.offsetWidth, label.offsetHeight, touch);
+      const width = label.offsetWidth;
+      const height = label.offsetHeight;
+      sideRef.current ??= labelSide(x, y, width, height, touch);
+      const spot = labelSpot(x, y, width, height, sideRef.current, touch);
       label.style.transform = `translate(${spot.left}px, ${spot.top}px)`;
     };
 
@@ -357,6 +388,7 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
         if (resolved.ok) store.dispatch(resolved.value);
       }
       setRefused("no");
+      sideRef.current = null;
       publish(IDLE);
     };
 
@@ -405,7 +437,10 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
     const label = labelRef.current;
     if (state.dragId === null || label === null) return;
     const { x, y, touch } = state.startAt;
-    const spot = labelSpot(x, y, label.offsetWidth, label.offsetHeight, touch);
+    const width = label.offsetWidth;
+    const height = label.offsetHeight;
+    sideRef.current = labelSide(x, y, width, height, touch);
+    const spot = labelSpot(x, y, width, height, sideRef.current, touch);
     label.style.transform = `translate(${spot.left}px, ${spot.top}px)`;
   }, [state.dragId, state.startAt]);
 
