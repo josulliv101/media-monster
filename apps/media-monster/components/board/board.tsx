@@ -6,6 +6,7 @@ import {
   use,
   useEffect,
   useId,
+  useMemo,
   useRef,
   useState,
   useSyncExternalStore,
@@ -58,8 +59,12 @@ import { BoardDragProvider, DropPlaceholder, useBoardDrag } from "./board-drag";
 import { readCollection, restoreSwitchedOff } from "./read-collection";
 import {
   BOARD_RESET_EVENT,
+  BOARD_SAVE_KEY,
+  cancelPendingSave,
   clearSavedBoard,
+  hasPendingSave,
   readSavedBoard,
+  registerPendingSave,
   writeSavedBoard,
   type SavedBoard,
 } from "./board-save";
@@ -367,6 +372,74 @@ type Branch = Readonly<{ offBy: NodeId | null; offByName: string | null }>;
 const ON: Branch = { offBy: null, offByName: null };
 const BranchContext = createContext<Branch>(ON);
 
+/**
+ * EVERY CHILD'S NEIGHBOURS OF ITS OWN KIND, worked out ONCE by the collection
+ * that holds them: the clip before and after each clip, the row before and
+ * after each row. Move up and Move down read theirs from here.
+ *
+ * Each card used to scan and slice its parent's whole child list to find its
+ * neighbours, which is quadratic across a collection, and to do it read the
+ * whole graph, so every card redrew on every edit anywhere on the board. Now
+ * a collection splits its children in one pass, the map keeps its identity
+ * while the children do, and a card subscribes only to its two neighbours'
+ * nodes (for their names).
+ */
+type Neighbours = Readonly<{ before: NodeId | null; after: NodeId | null }>;
+const NO_NEIGHBOURS: Neighbours = { before: null, after: null };
+const NeighboursContext = createContext<ReadonlyMap<NodeId, Neighbours>>(new Map());
+
+/** One pass: each child's previous and next sibling of the same kind. */
+function neighboursOf(
+  children: readonly NodeId[],
+  isRow: ReadonlySet<NodeId>,
+): ReadonlyMap<NodeId, Neighbours> {
+  const map = new Map<NodeId, { before: NodeId | null; after: NodeId | null }>();
+  let lastClip: NodeId | null = null;
+  let lastRow: NodeId | null = null;
+  for (const childId of children) {
+    const row = isRow.has(childId);
+    const before = row ? lastRow : lastClip;
+    map.set(childId, { before, after: null });
+    if (before !== null) {
+      const previous = map.get(before);
+      if (previous !== undefined) previous.after = childId;
+    }
+    if (row) lastRow = childId;
+    else lastClip = childId;
+  }
+  return map;
+}
+
+/** Moves `id` to `toIndexBefore` among its current siblings, as a drop would.
+ *  Reads the graph at the moment of the move, so no card subscribes to it. */
+function moveAmongSiblings(
+  store: ReturnType<typeof useStore>,
+  id: NodeId,
+  neighbour: NodeId,
+  after: boolean,
+): string | null {
+  const graph = store.getGraph();
+  const parentId = getParent(graph, id);
+  if (parentId === null) return null;
+  const at = getChildren(graph, parentId).indexOf(neighbour);
+  if (at < 0) return null;
+  const command = store.resolveDrop({
+    type: "move",
+    nodeIds: [id],
+    toParentId: parentId,
+    toIndexBefore: at + (after ? 1 : 0),
+  });
+  if (!command.ok) return `${command.error.code}: ${command.error.message}`;
+  store.dispatch(command.value);
+  return null;
+}
+
+/** A neighbour's display name, for "Before …" / "After …". */
+function nameOfNode(node: ReturnType<typeof useNode>, fallback: string): string {
+  if (node === undefined || node.sealed) return fallback;
+  return node.kind === "clip" ? node.data.title : node.data.name;
+}
+
 /** Opens the preview on a clip, growing it out of that clip's card. Provided
  *  by `BoardBody`, which owns the preview and the space it fills. */
 const BoardPreviewContext = createContext<(id: NodeId) => void>(() => undefined);
@@ -386,53 +459,34 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
 
   // MOVE UP AND DOWN, a clip's keyboard way to reorder, as a row's are: past
   // the neighbouring CLIP at the same level (not past a row), one undo step
-  // each through `resolveDrop`, and the menu stays open on the moved card.
-  const graph = useGraph();
+  // each through `resolveDrop`, and the menu stays open on the moved card. The
+  // neighbours come from the collection (`NeighboursContext`), not a scan.
   const store = useStore();
-  const parentId = getParent(graph, id);
-  const siblings = parentId === null ? [] : getChildren(graph, parentId);
-  const isClip = (childId: NodeId) => {
-    const child = getNode(graph, childId);
-    return child !== undefined && !child.sealed && child.kind === "clip";
-  };
-  const here = siblings.indexOf(id);
-  const clipBefore = siblings.slice(0, Math.max(0, here)).findLast(isClip) ?? null;
-  const clipAfter = siblings.slice(here + 1).find(isClip) ?? null;
-  const titleOf = (clipId: NodeId) => {
-    const clip = getNode(graph, clipId);
-    return clip !== undefined && !clip.sealed && clip.kind === "clip" ? clip.data.title : "the next clip";
-  };
-  const moveTo = (toIndexBefore: number) => {
-    if (parentId === null) return;
-    const command = store.resolveDrop({
-      type: "move",
-      nodeIds: [id],
-      toParentId: parentId,
-      toIndexBefore,
-    });
-    if (command.ok) store.dispatch(command.value);
-  };
+  const { before: clipBefore, after: clipAfter } = use(NeighboursContext).get(id) ?? NO_NEIGHBOURS;
+  const beforeNode = useNode(clipBefore ?? id);
+  const afterNode = useNode(clipAfter ?? id);
   const clipActions: readonly RowAction[] = [
     {
       id: "move-up",
       label: "Move up",
-      hint: clipBefore === null ? "Already first" : `Before ${titleOf(clipBefore)}`,
+      hint:
+        clipBefore === null ? "Already first" : `Before ${nameOfNode(beforeNode, "the clip before")}`,
       icon: <ArrowUp className="size-4" />,
       disabled: clipBefore === null,
       keepOpen: true,
       onSelect: () => {
-        if (clipBefore !== null) moveTo(siblings.indexOf(clipBefore));
+        if (clipBefore !== null) moveAmongSiblings(store, id, clipBefore, false);
       },
     },
     {
       id: "move-down",
       label: "Move down",
-      hint: clipAfter === null ? "Already last" : `After ${titleOf(clipAfter)}`,
+      hint: clipAfter === null ? "Already last" : `After ${nameOfNode(afterNode, "the clip after")}`,
       icon: <ArrowDown className="size-4" />,
       disabled: clipAfter === null,
       keepOpen: true,
       onSelect: () => {
-        if (clipAfter !== null) moveTo(siblings.indexOf(clipAfter) + 1);
+        if (clipAfter !== null) moveAmongSiblings(store, id, clipAfter, true);
       },
     },
   ];
@@ -577,53 +631,35 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   // layout clips are not even drawn among them. Through `resolveDrop`, like a
   // drop, so it is one undoable step. Not on the row the board is showing,
   // which has no visible siblings to pass.
-  const moveParentId = getParent(graph, id);
-  const siblings = moveParentId === null ? [] : getChildren(graph, moveParentId);
-  const isRow = (childId: NodeId) => {
-    const child = getNode(graph, childId);
-    return child !== undefined && !child.sealed && child.kind === "collection";
-  };
-  const here = siblings.indexOf(id);
-  const rowAbove = siblings.slice(0, Math.max(0, here)).findLast(isRow) ?? null;
-  const rowBelow = siblings.slice(here + 1).find(isRow) ?? null;
-  const nameOf = (rowId: NodeId) => {
-    const row = getNode(graph, rowId);
-    return row !== undefined && !row.sealed && row.kind === "collection" ? row.data.name : "the next row";
-  };
-  const moveTo = (toIndexBefore: number) => {
-    if (moveParentId === null) return;
-    const command = store.resolveDrop({
-      type: "move",
-      nodeIds: [id],
-      toParentId: moveParentId,
-      toIndexBefore,
-    });
-    if (command.ok) store.dispatch(command.value);
-    else setRejection(`${command.error.code}: ${command.error.message}`);
-  };
+  // Its neighbours come from the collection above it (`NeighboursContext`).
+  const { before: rowAbove, after: rowBelow } = use(NeighboursContext).get(id) ?? NO_NEIGHBOURS;
+  const aboveNode = useNode(rowAbove ?? id);
+  const belowNode = useNode(rowBelow ?? id);
   const moveActions: readonly RowAction[] = isRoot
     ? []
     : [
         {
           id: "move-up",
           label: "Move up",
-          hint: rowAbove === null ? "Already first" : `Before ${nameOf(rowAbove)}`,
+          hint:
+            rowAbove === null ? "Already first" : `Before ${nameOfNode(aboveNode, "the row above")}`,
           icon: <ArrowUp className="size-4" />,
           disabled: rowAbove === null,
           keepOpen: true,
           onSelect: () => {
-            if (rowAbove !== null) moveTo(siblings.indexOf(rowAbove));
+            if (rowAbove !== null) setRejection(moveAmongSiblings(store, id, rowAbove, false));
           },
         },
         {
           id: "move-down",
           label: "Move down",
-          hint: rowBelow === null ? "Already last" : `After ${nameOf(rowBelow)}`,
+          hint:
+            rowBelow === null ? "Already last" : `After ${nameOfNode(belowNode, "the row below")}`,
           icon: <ArrowDown className="size-4" />,
           disabled: rowBelow === null,
           keepOpen: true,
           onSelect: () => {
-            if (rowBelow !== null) moveTo(siblings.indexOf(rowBelow) + 1);
+            if (rowBelow !== null) setRejection(moveAmongSiblings(store, id, rowBelow, true));
           },
         },
       ];
@@ -689,11 +725,25 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   // Split once, read by the row layout below. A sealed child's kind came off
   // the wire and cannot be trusted to name a view, so it is grouped with the
   // clips — it draws as a card either way.
-  const clipIds = children.filter((childId) => {
+  // ONE PASS, not a `filter` and then an `includes` inside another `filter`,
+  // which was quadratic in the number of children.
+  const clipIds: NodeId[] = [];
+  const collectionIds: NodeId[] = [];
+  for (const childId of children) {
     const child = getNode(graph, childId);
-    return child === undefined || child.sealed || child.kind !== "collection";
-  });
-  const collectionIds = children.filter((childId) => !clipIds.includes(childId));
+    if (child !== undefined && !child.sealed && child.kind === "collection") {
+      collectionIds.push(childId);
+    } else {
+      clipIds.push(childId);
+    }
+  }
+  // Kept while the children and their kinds are: a new map would redraw every
+  // card that reads its neighbours from it.
+  const rowKey = collectionIds.join("\u0000");
+  const neighbours = useMemo(
+    () => neighboursOf(children, new Set(rowKey === "" ? [] : (rowKey.split("\u0000") as NodeId[]))),
+    [children, rowKey],
+  );
   // In the row layout the rows are stacked apart from the clips, so a dragged
   // ROW's placeholder goes before the first row at or after its index, and a
   // dragged CLIP's before the first clip at or after it, in the clips' strip.
@@ -743,7 +793,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   // What a collection holds, drawn inside its box — or, for the real root,
   // drawn as the board itself.
   const contents = (
-    <>
+    <NeighboursContext value={neighbours}>
       {unread ? (
         <p className="rounded-lg border border-dashed border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-300/80">
           {summarized
@@ -837,7 +887,7 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
           </span>
         ) : null}
       </div>
-    </>
+    </NeighboursContext>
   );
 
   if (bare) {
@@ -1324,10 +1374,15 @@ export function Board({
   // leaving is not lost. A refused save (the engine found the board would not
   // load back) writes NOTHING, keeps the last good save, and says so.
   const [saveError, setSaveError] = useState<string | null>(null);
+  // ANOTHER TAB SAVED this board (see below): "adopted" when this tab had
+  // nothing unsaved and took the other tab's version; "conflict" when it had an
+  // edit of its own waiting, and saving is paused until the user picks.
+  const [otherTab, setOtherTab] = useState<"adopted" | "conflict" | null>(null);
   const store = built?.store ?? null;
   const savingBlockedBy = built?.savingBlockedBy ?? null;
+  const savingPaused = savingBlockedBy !== null || otherTab === "conflict";
   useEffect(() => {
-    if (store === null || savingBlockedBy !== null) return;
+    if (store === null || savingPaused) return;
     let timer: number | null = null;
     const flush = () => {
       if (timer === null) return;
@@ -1335,6 +1390,13 @@ export function Board({
       timer = null;
       setSaveError(writeSavedBoard(store.getGraph()));
     };
+    const release = registerPendingSave({
+      pending: () => timer !== null,
+      cancel: () => {
+        if (timer !== null) window.clearTimeout(timer);
+        timer = null;
+      },
+    });
     const unsubscribe = store.subscribeToChanges(() => {
       if (timer !== null) window.clearTimeout(timer);
       timer = window.setTimeout(() => {
@@ -1349,17 +1411,47 @@ export function Board({
     window.addEventListener("pagehide", flush);
     return () => {
       flush();
+      release();
       unsubscribe();
       document.removeEventListener("visibilitychange", onHide);
       window.removeEventListener("pagehide", flush);
     };
-  }, [store, savingBlockedBy]);
+  }, [store, savingPaused]);
+
+  // ANOTHER TAB SAVED. Each tab used to hold the board it loaded and write the
+  // whole of it back, so a second tab's edit replaced the first tab's without a
+  // word (measured: tab A's move was gone after tab B saved). The browser tells
+  // every OTHER tab when the save changes (`storage`); this tab then takes the
+  // newer board if it has nothing unsaved of its own, and says so. If it does
+  // have an edit waiting, that write is held back and the user chooses.
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.storageArea !== window.localStorage) return;
+      // `key` is null when storage was cleared outright.
+      if (event.key !== null && event.key !== BOARD_SAVE_KEY) return;
+      if (hasPendingSave()) {
+        cancelPendingSave();
+        setOtherTab("conflict");
+        return;
+      }
+      setSaveError(null);
+      setOtherTab("adopted");
+      setBuilt(fromSaved(readSavedBoard(), []));
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, []);
 
   // RESET FROM SETTINGS: the save is already cleared there; the board goes
   // back to the sample, every row on.
   useEffect(() => {
     const onReset = () => {
+      // Settings has cleared the save, cancelling a write still in its delay;
+      // cancelled again here so a reset from anywhere cannot be undone by the
+      // old store's cleanup flushing it back.
+      cancelPendingSave();
       setSaveError(null);
+      setOtherTab(null);
       setBuilt(fromSample([], false));
     };
     window.addEventListener(BOARD_RESET_EVENT, onReset);
@@ -1395,6 +1487,34 @@ export function Board({
             setBuilt(fromSample([], false));
           }}
         />
+      ) : otherTab === "conflict" ? (
+        <OtherTabConflictNotice
+          onLoadTheirs={() => {
+            setOtherTab(null);
+            setBuilt(fromSaved(readSavedBoard(), []));
+          }}
+          onKeepMine={() => {
+            setOtherTab(null);
+            setSaveError(writeSavedBoard(built.store.getGraph()));
+          }}
+        />
+      ) : otherTab === "adopted" ? (
+        <p
+          role="status"
+          data-other-tab-adopted
+          className="mb-3 flex items-center gap-3 rounded-lg border border-sky-500/30 bg-sky-500/10 px-3 py-2 text-xs text-sky-200"
+        >
+          <span className="min-w-0 flex-1">
+            Updated with changes made in another tab.
+          </span>
+          <button
+            type="button"
+            onClick={() => setOtherTab(null)}
+            className="shrink-0 rounded-md px-2 py-0.5 text-sky-100 transition-colors hover:bg-sky-500/20"
+          >
+            Dismiss
+          </button>
+        </p>
       ) : saveError !== null ? (
         <p
           role="alert"
@@ -1426,6 +1546,43 @@ export function Board({
  * was deleted is not), and only a component inside the Provider can subscribe.
  */
 const noSubscription = () => () => undefined;
+
+/**
+ * THIS BOARD WAS CHANGED IN ANOTHER TAB while this one had an edit not yet
+ * written. Neither version is thrown away without asking: saving here is
+ * paused, and the user picks which one becomes the saved board.
+ */
+function OtherTabConflictNotice({
+  onLoadTheirs,
+  onKeepMine,
+}: Readonly<{ onLoadTheirs: () => void; onKeepMine: () => void }>) {
+  return (
+    <div
+      role="alert"
+      data-other-tab-conflict
+      className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200"
+    >
+      <span className="min-w-0 flex-1">
+        This board was changed in another tab, and your latest change here isn’t saved
+        yet. Which version should be kept?
+      </span>
+      <button
+        type="button"
+        onClick={onLoadTheirs}
+        className="shrink-0 rounded-md border border-amber-400/50 px-2 py-1 text-amber-100 transition-colors hover:border-amber-300 hover:bg-amber-500/10"
+      >
+        Load the other tab’s
+      </button>
+      <button
+        type="button"
+        onClick={onKeepMine}
+        className="shrink-0 rounded-md border border-amber-400/50 px-2 py-1 text-amber-100 transition-colors hover:border-amber-300 hover:bg-amber-500/10"
+      >
+        Keep mine
+      </button>
+    </div>
+  );
+}
 
 /**
  * THE SAVED BOARD COULD NOT BE LOADED. The sample is shown instead, and saving

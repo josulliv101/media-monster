@@ -2,6 +2,7 @@ import {
   BOARD_SAVED_COOKIE,
   BOARD_SAVED_COOKIE_MAX_AGE_SECONDS,
 } from "@/components/settings/saved-board-preference";
+import { writeInactiveRows } from "@/components/settings/inactive-rows-preference";
 import { engine } from "@/lib/engine/engine";
 
 /**
@@ -22,7 +23,9 @@ import { engine } from "@/lib/engine/engine";
  * loadable, the board in memory is not. The caller says so; it does not write
  * anyway.
  */
-const KEY = "mm:board:v1";
+/** The storage key the board is saved under; other tabs watch it (`storage`). */
+export const BOARD_SAVE_KEY = "mm:board:v1";
+const KEY = BOARD_SAVE_KEY;
 
 type Graph = ReturnType<typeof engine.createStore>["getGraph"] extends () => infer G ? G : never;
 
@@ -67,8 +70,47 @@ export function writeSavedBoard(graph: Graph): string | null {
   return null;
 }
 
-/** Forgets the saved board: the next load starts from the sample. */
+/**
+ * THE SAVE WAITING TO BE WRITTEN, if any: the board's autosave registers
+ * itself here while it runs, so that clearing the save (Reset, Start over) can
+ * cancel a write still sitting in its delay first, and a change arriving from
+ * another tab can tell whether this one has an edit of its own not yet saved.
+ *
+ * Without the cancel, a Reset inside the delay was undone by the autosave's own
+ * cleanup, which flushed the OLD board back into storage straight after it was
+ * cleared (measured: the reset board came back on reload).
+ */
+type PendingSave = Readonly<{ pending: () => boolean; cancel: () => void }>;
+let pendingSave: PendingSave | null = null;
+
+export function registerPendingSave(save: PendingSave): () => void {
+  pendingSave = save;
+  return () => {
+    if (pendingSave === save) pendingSave = null;
+  };
+}
+
+/** Whether this tab has an edit made but not yet written. */
+export function hasPendingSave(): boolean {
+  return pendingSave?.pending() ?? false;
+}
+
+/** Drops this tab's unwritten edit without writing it. */
+export function cancelPendingSave(): void {
+  pendingSave?.cancel();
+}
+
+/**
+ * Forgets the saved board: the next load starts from the sample, every row on.
+ *
+ * The switched-off rows go too. Their cookie keeps the ids of rows inside
+ * collections not read yet, so they can be switched off again when read; left
+ * behind by a reset, it switched them off again in the fresh sample (measured:
+ * B-roll's Locations came back off after Reset and reopening B-roll).
+ */
 export function clearSavedBoard(): void {
+  cancelPendingSave();
+  writeInactiveRows([]);
   try {
     window.localStorage.removeItem(KEY);
   } catch {
