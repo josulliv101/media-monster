@@ -456,6 +456,9 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
   const boardDrag = useBoardDrag();
   // Faded while it is the one being dragged, like a dragged row.
   const beingDragged = boardDrag.state.dragId === id;
+  // Said on the card when it is the one under the pointer that will not take
+  // the drop, as a row says it on its bar.
+  const refusalHere = boardDrag.state.refusal?.at === id ? boardDrag.state.refusal : null;
 
   // MOVE UP AND DOWN, a clip's keyboard way to reorder, as a row's are: past
   // the neighbouring CLIP at the same level (not past a row), one undo step
@@ -505,6 +508,7 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
       className={cn(
         "group/clip relative flex flex-col overflow-hidden rounded-lg border transition-[border-color,background-color,opacity]",
         beingDragged && "opacity-40",
+        refusalHere !== null && "ring-2 ring-red-400/70",
         selected
           ? "border-sky-400/60 bg-sky-400/10 text-zinc-50"
           : "border-zinc-800 bg-zinc-900/40 text-zinc-300 hover:border-zinc-700 hover:bg-zinc-900",
@@ -524,7 +528,17 @@ function ClipCard({ id, data }: NodeViewProps<NodeTypes, "clip">) {
         }}
         className="flex w-full flex-col text-left focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-sky-500"
       >
-        <span data-clip-picture={id} className="block">
+        <span data-clip-picture={id} className="relative block">
+          {refusalHere !== null ? (
+            <span
+              role="status"
+              data-drop-refusal
+              // Centred on the picture, as a row's is centred on its bar.
+              className="pointer-events-none absolute top-1/2 left-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-full border border-red-400/50 bg-zinc-950/90 px-3 py-1 text-xs font-medium whitespace-nowrap text-red-300 shadow-lg shadow-black/40"
+            >
+              {refusalHere.message}
+            </span>
+          ) : null}
           <ClipPicture media={data.media} seconds={data.seconds} />
         </span>
         {/* The right padding keeps the duration clear of the ⋮ and the grip,
@@ -697,6 +711,9 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
   // the open row the drop will land in.
   const boardDrag = useBoardDrag();
   const dropTarget = boardDrag.state.target;
+  // THE REFUSAL, when this row is the one under the pointer that will not
+  // take the drop (or is being read so that it can): said here, on the row.
+  const refusalHere = boardDrag.state.refusal?.at === id ? boardDrag.state.refusal : null;
   const beingDragged = boardDrag.state.dragId === id;
   const intoWhileClosed =
     dropTarget !== null && dropTarget.kind === "into" && dropTarget.parentId === id && collapsed;
@@ -917,7 +934,10 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
       className={cn(
         "col-span-full border border-zinc-800 bg-zinc-950/60 p-2 transition-opacity md:p-3",
         isRoot || isTopLevel ? "rounded-xl" : "rounded-l-xl border-r-0 pr-0 md:pr-0",
-        beingDragged && "opacity-40",
+        // Faded while dragged — except while the pointer is inside it, where
+        // it is refused: the refusal is said on a row inside this one, and a
+        // faded parent would fade the message with it.
+        beingDragged && boardDrag.state.refusal?.ownBranch !== true && "opacity-40",
       )}
     >
       {/* THE WHOLE BAR TOGGLES: icon, name, duration, triangle and the space
@@ -943,8 +963,10 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
           data-row-open={!collapsed}
           data-row-root={isRoot}
           className={cn(
-            "group/row flex items-stretch gap-1 rounded-lg transition-colors hover:bg-zinc-800/60",
+            "group/row relative flex items-stretch gap-1 rounded-lg transition-colors hover:bg-zinc-800/60",
             intoWhileClosed && "bg-sky-400/10 ring-2 ring-sky-400 ring-inset",
+            refusalHere?.why === "refused" && "bg-red-500/10 ring-2 ring-red-400/70 ring-inset",
+            refusalHere?.why === "reading" && "bg-amber-400/10 ring-2 ring-amber-400/60 ring-inset",
             "has-[[data-collection-toggle]:focus-visible]:bg-zinc-800/60 has-[[data-collection-toggle]:focus-visible]:outline-2 has-[[data-collection-toggle]:focus-visible]:-outline-offset-2 has-[[data-collection-toggle]:focus-visible]:outline-sky-500",
             "has-[[data-menu-button][aria-expanded=true]]:bg-zinc-800/60",
           )}
@@ -1035,9 +1057,25 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
           )}
           {/* THE ROW'S MENU (see `action-menu.tsx`). Its items are `menuActions`. */}
           <ActionMenu label={data.name} actions={menuActions} />
-          {intoWhileClosed ? (
-            <span className="shrink-0 self-center rounded-full bg-sky-400/15 px-2 py-0.5 text-xs text-sky-300">
-              Move into
+          {/* WHAT A DROP HERE WOULD DO, in the middle of the row, both ways:
+              where the eye already is while aiming at it. Over the bar, not in
+              its flow, so nothing in the row moves when it appears; and it
+              takes no pointer, so the row under it is still what is aimed at. */}
+          {refusalHere !== null || intoWhileClosed ? (
+            <span
+              role="status"
+              data-drop-refusal={refusalHere !== null ? true : undefined}
+              data-drop-into={refusalHere === null ? true : undefined}
+              className={cn(
+                "pointer-events-none absolute top-1/2 left-1/2 z-10 -translate-x-1/2 -translate-y-1/2 rounded-full border px-3 py-1 text-xs font-medium whitespace-nowrap shadow-lg shadow-black/40",
+                refusalHere === null
+                  ? "border-sky-400/50 bg-zinc-950/90 text-sky-300"
+                  : refusalHere.why === "refused"
+                    ? "border-red-400/50 bg-zinc-950/90 text-red-300"
+                    : "border-amber-400/50 bg-zinc-950/90 text-amber-200",
+              )}
+            >
+              {refusalHere !== null ? refusalHere.message : "Move into"}
             </span>
           ) : null}
           {/* THE DRAG GRIP, last in the row so every grip sits against its
