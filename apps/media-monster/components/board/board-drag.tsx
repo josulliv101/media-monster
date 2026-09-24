@@ -1,8 +1,7 @@
 "use client";
 
 import { getChildren, getParent, type NodeId } from "@josulliv101/nested-collections";
-import { createContext, use, useRef, useState, type ReactNode } from "react";
-import { GripVertical } from "lucide-react";
+import { createContext, use, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 
 import { useStore } from "@/lib/engine/bindings";
 import { isUnread, readCollection } from "./read-collection";
@@ -79,7 +78,7 @@ type BoardDragState = Readonly<{
   target: DropTarget | null;
   /** Where the pointer was when the drag began, for the label's first frame;
    *  after that the label is moved by hand, not by rendering. */
-  startAt: Readonly<{ x: number; y: number }>;
+  startAt: Readonly<{ x: number; y: number; touch: boolean }>;
 }>;
 
 type BoardDragValue = Readonly<{
@@ -97,7 +96,7 @@ const IDLE: BoardDragState = {
   dragName: "",
   dragKind: "row",
   target: null,
-  startAt: { x: 0, y: 0 },
+  startAt: { x: 0, y: 0, touch: false },
 };
 
 const BoardDragContext = createContext<BoardDragValue>({
@@ -121,6 +120,67 @@ const MAX_SCROLL_PX_PER_FRAME = 18;
 
 type Candidate = Readonly<{ parentId: NodeId; index: number; kind: "between" | "into" }>;
 
+/** How far the drag label sits from the pointer, and from the window's edges. */
+const LABEL_GAP_PX = 14;
+const LABEL_MARGIN_PX = 8;
+/** Above a finger by this much, so the thumb doesn't cover it. */
+const LABEL_ABOVE_TOUCH_PX = 28;
+
+/** Which side of the pointer the drag label is on, chosen once per drag. */
+type LabelSide = Readonly<{ left: boolean; above: boolean }>;
+
+/**
+ * WHICH SIDE OF THE POINTER THE DRAG LABEL GOES, decided ONCE, when it first
+ * appears, and kept for the whole drag: a label that jumped from one side of
+ * the pointer to the other as it neared an edge was one more thing moving.
+ *
+ * Right of and below the pointer when there is room at the start, which is
+ * where it always sat. Every grip is at the far right of its row or card,
+ * though, and there it went off the right edge of the window, where nobody saw
+ * it; so a drag that starts without room on the right puts it on the left, and
+ * one without room below puts it above. On a touch screen it goes above, where
+ * the finger does not cover it.
+ */
+function labelSide(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  touch: boolean,
+): LabelSide {
+  const right = document.documentElement.clientWidth - LABEL_MARGIN_PX;
+  const bottom = window.innerHeight - LABEL_MARGIN_PX;
+  return {
+    left: x + LABEL_GAP_PX + width > right,
+    above: touch || y + LABEL_GAP_PX + height > bottom,
+  };
+}
+
+/**
+ * The label's position on its chosen side of the pointer. Held inside the
+ * window as the pointer nears an edge — it slides along it, it does not swap
+ * sides.
+ */
+function labelSpot(
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  side: LabelSide,
+  touch: boolean,
+): Readonly<{ left: number; top: number }> {
+  const right = document.documentElement.clientWidth - LABEL_MARGIN_PX;
+  const bottom = window.innerHeight - LABEL_MARGIN_PX;
+  const left = side.left ? x - LABEL_GAP_PX - width : x + LABEL_GAP_PX;
+  const top = side.above
+    ? y - height - (touch ? LABEL_ABOVE_TOUCH_PX : LABEL_GAP_PX)
+    : y + LABEL_GAP_PX;
+  return {
+    left: Math.max(LABEL_MARGIN_PX, Math.min(left, right - width)),
+    top: Math.max(LABEL_MARGIN_PX, Math.min(top, bottom - height)),
+  };
+}
+
 function sameTarget(a: DropTarget | null, b: DropTarget | null): boolean {
   return (
     a === b ||
@@ -140,6 +200,8 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
   const [refused, setRefused] = useState<"no" | "refused" | "reading">("no");
   const stateRef = useRef<BoardDragState>(IDLE);
   const labelRef = useRef<HTMLDivElement>(null);
+  // The side the label took when this drag's label first appeared (above).
+  const sideRef = useRef<LabelSide | null>(null);
 
   const publish = (next: BoardDragState) => {
     stateRef.current = next;
@@ -246,9 +308,15 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
     // Collections this drag has started reading, so a hover reads each once.
     const reading = new Set<NodeId>();
 
+    const touch = event.pointerType === "touch";
     const place = (x: number, y: number) => {
       const label = labelRef.current;
-      if (label !== null) label.style.transform = `translate(${x + 14}px, ${y + 10}px)`;
+      if (label === null) return;
+      const width = label.offsetWidth;
+      const height = label.offsetHeight;
+      sideRef.current ??= labelSide(x, y, width, height, touch);
+      const spot = labelSpot(x, y, width, height, sideRef.current, touch);
+      label.style.transform = `translate(${spot.left}px, ${spot.top}px)`;
     };
 
     const retarget = () => {
@@ -319,6 +387,7 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
         if (resolved.ok) store.dispatch(resolved.value);
       }
       setRefused("no");
+      sideRef.current = null;
       publish(IDLE);
     };
 
@@ -335,7 +404,7 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
           dragName: name,
           dragKind: kind,
           target: null,
-          startAt: { x: lastX, y: lastY },
+          startAt: { x: lastX, y: lastY, touch },
         });
         frame = requestAnimationFrame(scroll);
       }
@@ -362,6 +431,18 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
     window.addEventListener("keydown", onKey, true);
   };
 
+  // Its first frame is placed once it has a size to place by, before paint.
+  useLayoutEffect(() => {
+    const label = labelRef.current;
+    if (state.dragId === null || label === null) return;
+    const { x, y, touch } = state.startAt;
+    const width = label.offsetWidth;
+    const height = label.offsetHeight;
+    sideRef.current = labelSide(x, y, width, height, touch);
+    const spot = labelSpot(x, y, width, height, sideRef.current, touch);
+    label.style.transform = `translate(${spot.left}px, ${spot.top}px)`;
+  }, [state.dragId, state.startAt]);
+
   return (
     <BoardDragContext value={{ state, start }}>
       {children}
@@ -370,15 +451,15 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
           ref={labelRef}
           aria-hidden="true"
           data-drag-label
-          style={{ transform: `translate(${state.startAt.x + 14}px, ${state.startAt.y + 10}px)` }}
-          className="pointer-events-none fixed top-0 left-0 z-50 flex items-center gap-1.5 rounded-lg border border-zinc-700 bg-zinc-900/95 px-3 py-1.5 text-sm font-semibold text-zinc-100 shadow-xl shadow-black/50"
+          // A blue edge, so it reads as the thing being carried rather than
+          // one more dark box on a dark board.
+          className="pointer-events-none fixed top-0 left-0 z-50 flex max-w-[min(20rem,calc(100vw-1rem))] items-center gap-1.5 rounded-lg border border-sky-400/70 bg-zinc-900/95 px-3 py-1.5 text-sm font-semibold text-zinc-100 shadow-xl ring-2 shadow-black/50 ring-sky-400/25"
         >
-          <GripVertical className="size-3.5 text-zinc-500" />
-          {state.dragName}
+          <span className="min-w-0 truncate">{state.dragName}</span>
           {refused === "refused" ? (
-            <span className="ml-1 text-xs font-normal text-red-400">Can’t go here</span>
+            <span className="ml-1 shrink-0 text-xs font-normal text-red-400">Can’t go here</span>
           ) : refused === "reading" ? (
-            <span className="ml-1 text-xs font-normal text-amber-300">Opening…</span>
+            <span className="ml-1 shrink-0 text-xs font-normal text-amber-300">Opening…</span>
           ) : null}
         </div>
       )}
