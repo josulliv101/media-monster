@@ -1750,7 +1750,9 @@ function BoardBody({
     const column = tree.getBoundingClientRect();
     const bar = document.querySelector("[data-mobile-top-bar]")?.getBoundingClientRect().bottom ?? 0;
     const top = Math.max(column.top, bar, 0);
-    const bottom = strip.getBoundingClientRect().top;
+    // Above the film strip, and never below the window's bottom edge whatever
+    // the strip is doing: the preview must not run off screen or under it.
+    const bottom = Math.min(strip.getBoundingClientRect().top, window.innerHeight);
     return { left: column.left, top, width: column.width, height: Math.max(0, bottom - top) };
   };
 

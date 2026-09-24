@@ -189,9 +189,16 @@ html body[data-scroll-locked] {
    (`components/board/board-preview.tsx`): it and the card it grows out of are
    both measured in viewport positions, so the page must not scroll between
    the two. `board-preview-gutter` is added only when the page had a
-   scrollbar, and keeps its width reserved so hiding it moves nothing. */
-html.board-preview-open,
-html.board-preview-open body {
+   scrollbar, and keeps its width reserved so hiding it moves nothing.
+
+   <html> ONLY, NOT <body>. `overflow: hidden` on the body as well made the
+   body a scroll container of its own, and the film strip — `position:
+   sticky`, pinned to the bottom of the nearest scrolling box — then stuck to
+   the body, which never scrolls, and fell back to its place at the end of the
+   board: measured, its top at y=1186 in a 900px window, off screen, with the
+   preview (sized down to it) running off the bottom too. Held on <html>, the
+   viewport stops scrolling and the strip stays on the bottom edge. */
+html.board-preview-open {
   overflow: hidden;
 }
 html.board-preview-gutter {
