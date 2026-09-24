@@ -2,7 +2,6 @@
 
 import { getChildren, getParent, type NodeId } from "@josulliv101/nested-collections";
 import { createContext, use, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { GripVertical } from "lucide-react";
 
 import { useStore } from "@/lib/engine/bindings";
 import { isUnread, readCollection } from "./read-collection";
@@ -456,7 +455,6 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
           // one more dark box on a dark board.
           className="pointer-events-none fixed top-0 left-0 z-50 flex max-w-[min(20rem,calc(100vw-1rem))] items-center gap-1.5 rounded-lg border border-sky-400/70 bg-zinc-900/95 px-3 py-1.5 text-sm font-semibold text-zinc-100 shadow-xl ring-2 shadow-black/50 ring-sky-400/25"
         >
-          <GripVertical className="size-3.5 shrink-0 text-sky-300" />
           <span className="min-w-0 truncate">{state.dragName}</span>
           {refused === "refused" ? (
             <span className="ml-1 shrink-0 text-xs font-normal text-red-400">Can’t go here</span>
