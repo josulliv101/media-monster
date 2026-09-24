@@ -55,7 +55,9 @@ import { isUnread, readCollection } from "./read-collection";
  * `store.resolveDrop` — the only place a post-removal index is computed — which
  * refuses a row dropped inside its own branch, into a collection not read yet,
  * or anywhere else the graph cannot take it. A refused spot shows no gap and a
- * not-allowed cursor; a spot that would not move it (next to itself) shows
+ * not-allowed cursor, and the row or card under the pointer says why (red
+ * edge, a "Can't move into itself" chip) — on the board, where you are looking,
+ * not on the drag label, which only ever carries the name; a spot that would not move it (next to itself) shows
  * nothing either. Letting go dispatches exactly the command it returned, so the
  * move is one undoable step.
  */
@@ -76,9 +78,22 @@ type BoardDragState = Readonly<{
    *  bar for a row, a card-sized slot among the cards for a clip. */
   dragKind: DragKind;
   target: DropTarget | null;
+  /** The row or card under the pointer that will NOT take the drop, and why,
+   *  or one being read so that it can. Drawn by that row or card. */
+  refusal: Refusal | null;
   /** Where the pointer was when the drag began, for the label's first frame;
    *  after that the label is moved by hand, not by rendering. */
   startAt: Readonly<{ x: number; y: number; touch: boolean }>;
+}>;
+
+export type Refusal = Readonly<{
+  /** The row or card under the pointer. */
+  at: NodeId;
+  why: "refused" | "reading";
+  message: string;
+  /** The pointer is inside the dragged row's own branch, which it cannot go
+   *  into. That row stops fading while so, or the message would fade with it. */
+  ownBranch: boolean;
 }>;
 
 type BoardDragValue = Readonly<{
@@ -96,6 +111,7 @@ const IDLE: BoardDragState = {
   dragName: "",
   dragKind: "row",
   target: null,
+  refusal: null,
   startAt: { x: 0, y: 0, touch: false },
 };
 
@@ -118,7 +134,25 @@ const START_PX = 4;
 const EDGE_PX = 72;
 const MAX_SCROLL_PX_PER_FRAME = 18;
 
-type Candidate = Readonly<{ parentId: NodeId; index: number; kind: "between" | "into" }>;
+type Candidate = Readonly<{
+  parentId: NodeId;
+  index: number;
+  kind: "between" | "into";
+  /** The row or card under the pointer that this spot was read off. */
+  subject: NodeId;
+}>;
+
+/** What a refused spot says, in the row or card under the pointer. */
+function refusalMessage(code: string): string {
+  if (code === "would-create-cycle") return "Can’t move into itself";
+  if (code === "not-a-container") return "Can’t hold anything";
+  if (code === "cannot-move-root") return "Can’t be moved";
+  return "Can’t move here";
+}
+
+function sameRefusal(a: Refusal | null, b: Refusal | null): boolean {
+  return a === b || (a !== null && b !== null && a.at === b.at && a.why === b.why && a.message === b.message);
+}
 
 /** How far the drag label sits from the pointer, and from the window's edges. */
 const LABEL_GAP_PX = 14;
@@ -195,9 +229,6 @@ function sameTarget(a: DropTarget | null, b: DropTarget | null): boolean {
 export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }>) {
   const store = useStore();
   const [state, setState] = useState<BoardDragState>(IDLE);
-  // Why the spot under the pointer takes nothing: refused outright, or a
-  // collection being read so that it can.
-  const [refused, setRefused] = useState<"no" | "refused" | "reading">("no");
   const stateRef = useRef<BoardDragState>(IDLE);
   const labelRef = useRef<HTMLDivElement>(null);
   // The side the label took when this drag's label first appeared (above).
@@ -220,12 +251,13 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
       const parentId = getParent(graph, id);
       if (parentId === null) return "keep";
       const index = getChildren(graph, parentId).indexOf(id);
-      return { parentId, index: index + (after ? 1 : 0), kind: "between" };
+      return { parentId, index: index + (after ? 1 : 0), kind: "between", subject: id };
     };
     const intoSpot = (id: NodeId): Candidate => ({
       parentId: id,
       index: getChildren(graph, id).length,
       kind: "into",
+      subject: id,
     });
 
     // A CARD: before it or after it, by which half the pointer is on.
@@ -268,7 +300,7 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
   const judge = (
     dragId: NodeId,
     candidate: Candidate,
-  ): DropTarget | "stay" | "refused" | "unread" => {
+  ): DropTarget | "stay" | "unread" | Readonly<{ refused: string }> => {
     if (candidate.kind === "into" && isUnread(store.getGraph(), candidate.parentId)) {
       return "unread";
     }
@@ -278,8 +310,10 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
       toParentId: candidate.parentId,
       toIndexBefore: candidate.index,
     });
-    if (resolved.ok) return candidate;
-    return resolved.error.code === "empty-command" ? "stay" : "refused";
+    if (resolved.ok) {
+      return { parentId: candidate.parentId, index: candidate.index, kind: candidate.kind };
+    }
+    return resolved.error.code === "empty-command" ? "stay" : { refused: resolved.error.code };
   };
 
   const start = (
@@ -323,12 +357,18 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
       const candidate = candidateAt(lastX, lastY);
       if (candidate === "keep") return;
       let next: DropTarget | null = null;
-      let why: "no" | "refused" | "reading" = "no";
+      let refusal: Refusal | null = null;
       if (candidate !== null) {
         const verdict = judge(id, candidate);
-        if (verdict === "refused") why = "refused";
-        else if (verdict === "unread") {
-          why = "reading";
+        if (typeof verdict === "object" && "refused" in verdict) {
+          refusal = {
+            at: candidate.subject,
+            why: "refused",
+            message: refusalMessage(verdict.refused),
+            ownBranch: verdict.refused === "would-create-cycle",
+          };
+        } else if (verdict === "unread") {
+          refusal = { at: candidate.subject, why: "reading", message: "Opening…", ownBranch: false };
           if (!reading.has(candidate.parentId)) {
             reading.add(candidate.parentId);
             // Once it lands the spot is judged again, still under the pointer.
@@ -338,10 +378,15 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
           }
         } else if (verdict !== "stay") next = verdict;
       }
-      setRefused(why);
-      document.documentElement.classList.toggle("board-drag-refused", why === "refused");
-      if (!sameTarget(next, stateRef.current.target)) {
-        publish({ ...stateRef.current, target: next });
+      document.documentElement.classList.toggle(
+        "board-drag-refused",
+        refusal !== null && refusal.why === "refused",
+      );
+      if (
+        !sameTarget(next, stateRef.current.target) ||
+        !sameRefusal(refusal, stateRef.current.refusal)
+      ) {
+        publish({ ...stateRef.current, target: next, refusal });
       }
     };
 
@@ -386,7 +431,6 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
         });
         if (resolved.ok) store.dispatch(resolved.value);
       }
-      setRefused("no");
       sideRef.current = null;
       publish(IDLE);
     };
@@ -404,6 +448,7 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
           dragName: name,
           dragKind: kind,
           target: null,
+          refusal: null,
           startAt: { x: lastX, y: lastY, touch },
         });
         frame = requestAnimationFrame(scroll);
@@ -456,11 +501,6 @@ export function BoardDragProvider({ children }: Readonly<{ children: ReactNode }
           className="pointer-events-none fixed top-0 left-0 z-50 flex max-w-[min(20rem,calc(100vw-1rem))] items-center gap-1.5 rounded-lg border border-sky-400/70 bg-zinc-900/95 px-3 py-1.5 text-sm font-semibold text-zinc-100 shadow-xl ring-2 shadow-black/50 ring-sky-400/25"
         >
           <span className="min-w-0 truncate">{state.dragName}</span>
-          {refused === "refused" ? (
-            <span className="ml-1 shrink-0 text-xs font-normal text-red-400">Can’t go here</span>
-          ) : refused === "reading" ? (
-            <span className="ml-1 shrink-0 text-xs font-normal text-amber-300">Opening…</span>
-          ) : null}
         </div>
       )}
     </BoardDragContext>
