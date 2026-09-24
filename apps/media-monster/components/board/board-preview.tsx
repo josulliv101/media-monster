@@ -192,10 +192,38 @@ export function BoardPreview({
   const closeRef = useRef<HTMLButtonElement>(null);
   const box = fit(stage);
 
+  // THE STAGE FOLLOWS THE LAYOUT, not only the window. The board's column
+  // changes width when the sidebar opens or closes, and the room above the film
+  // strip changes when the strip's size does, with the window the same size
+  // throughout: measured, the preview stayed over the sidebar's new width after
+  // "Expand sidebar". So the board and the strip are watched as well.
+  //
+  // THE SIDEBAR ANIMATES, and a size observer only hears SIZE: measured, one
+  // run in three left the preview 15px short (x=257 against the board's 272),
+  // its last frames moving the board without resizing it. So the end of any
+  // transition remeasures too, and every remeasure is followed by one more a
+  // moment later, after the layout has settled.
   useEffect(() => {
-    const onResize = () => setStage(measureStage());
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
+    let settle = 0;
+    const measureNow = () => setStage(measureStage());
+    const remeasure = () => {
+      measureNow();
+      window.clearTimeout(settle);
+      settle = window.setTimeout(measureNow, 120);
+    };
+    window.addEventListener("resize", remeasure);
+    document.addEventListener("transitionend", remeasure);
+    const observer = new ResizeObserver(remeasure);
+    for (const selector of ["[data-board-tree]", "[data-board-strip]"]) {
+      const element = document.querySelector(selector);
+      if (element !== null) observer.observe(element);
+    }
+    return () => {
+      window.clearTimeout(settle);
+      window.removeEventListener("resize", remeasure);
+      document.removeEventListener("transitionend", remeasure);
+      observer.disconnect();
+    };
   }, [measureStage]);
 
   // OPEN: laid out at its final place, and started over the card before the
