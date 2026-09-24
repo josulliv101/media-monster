@@ -143,7 +143,8 @@ export function ActionMenu({
         data-menu-button
         className={cn(
           buttonClassName ??
-            "flex shrink-0 items-center self-stretch rounded-lg px-1.5 max-md:sr-only max-md:focus-visible:not-sr-only",
+            // Square, 40px, centred in the row, like "go to" and the grip.
+            "flex size-10 shrink-0 items-center justify-center self-center rounded-lg max-md:sr-only max-md:focus-visible:not-sr-only",
           "text-zinc-500 transition-colors hover:bg-zinc-700/60 hover:text-zinc-100 focus-visible:bg-zinc-700/60 focus-visible:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500",
           open && "bg-zinc-700/60 text-zinc-100",
         )}

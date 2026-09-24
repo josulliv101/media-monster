@@ -1024,7 +1024,9 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
               title={`Go to ${data.name}: show it, and everything inside it, on its own`}
               data-collection-focus
               onClick={() => focus(id)}
-              className="flex shrink-0 items-center rounded-lg px-2 text-zinc-500 transition-colors max-md:sr-only max-md:focus-visible:not-sr-only hover:bg-zinc-700/60 hover:text-zinc-100 focus-visible:bg-zinc-700/60 focus-visible:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500"
+              // SQUARE, 40px, centred in the row, like the ⋮ and the grip:
+              // a full-height strip made a hover tint taller than it was wide.
+              className="flex size-10 shrink-0 items-center justify-center self-center rounded-lg text-zinc-500 transition-colors max-md:sr-only max-md:focus-visible:not-sr-only hover:bg-zinc-700/60 hover:text-zinc-100 focus-visible:bg-zinc-700/60 focus-visible:text-zinc-100 focus-visible:outline-2 focus-visible:outline-sky-500"
             >
               {/* LogIn — an arrow going IN through a door: "enter this collection",
                   which is what the button does. */}
@@ -1059,12 +1061,12 @@ function CollectionCard({ id, data }: NodeViewProps<NodeTypes, "collection">) {
               data-row-drag-handle
               title="Drag to move"
               onPointerDown={(event) => boardDrag.start(id, data.name, "row", event)}
-              // A THUMB-SIZED TARGET ON A PHONE: 44px wide there, the icon
+              // SQUARE: 40px, and a thumb-sized 44px on a phone, the icon
               // centred in it. At 24px, against the screen edge and beside a
               // bar that swipes and scrolls, a touch 14px left of the icon's
               // centre (measured, real touch input) grabbed the bar instead
               // and no drag started. No long-press callout or selection.
-              className="flex shrink-0 cursor-grab touch-none items-center self-stretch rounded-lg px-1 text-zinc-600 transition-colors select-none [-webkit-touch-callout:none] hover:bg-zinc-700/60 hover:text-zinc-200 max-md:w-11 max-md:justify-center"
+              className="flex size-10 shrink-0 cursor-grab touch-none items-center justify-center self-center rounded-lg text-zinc-600 transition-colors select-none [-webkit-touch-callout:none] hover:bg-zinc-700/60 hover:text-zinc-200 max-md:size-11"
             >
               <GripVertical className="size-4" />
             </button>
