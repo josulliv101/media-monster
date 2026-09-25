@@ -60,14 +60,15 @@ import { readCollection, restoreSwitchedOff } from "./read-collection";
 import {
   BOARD_RESET_EVENT,
   BOARD_SAVE_KEY,
-  cancelPendingSave,
   clearSavedBoard,
-  hasPendingSave,
+  currentBoardAutosave,
+  discardUnsavedBoard,
   readSavedBoard,
-  registerPendingSave,
+  registerBoardAutosave,
   writeSavedBoard,
   type SavedBoard,
 } from "./board-save";
+import { createBoardAutosave } from "./board-autosave";
 import {
   BoardPreview,
   cardPicture,
@@ -1412,65 +1413,61 @@ export function Board({
   // change feed; loads and restored switches do not, by design). Batched a
   // moment, and flushed when the page is hidden so the last edit before
   // leaving is not lost. A refused save (the engine found the board would not
-  // load back) writes NOTHING, keeps the last good save, and says so.
+  // load back) writes NOTHING, keeps the last good save, and says so — and the
+  // edits stay UNSAVED, so the next edit, hiding the page, leaving it, or "Try
+  // again" writes them. Whether anything is unsaved is `board-autosave.ts`'s
+  // own flag, not "is a write waiting in its delay": see the note there for
+  // the two ways that answer lost edits.
   const [saveError, setSaveError] = useState<string | null>(null);
   // ANOTHER TAB SAVED this board (see below): "adopted" when this tab had
-  // nothing unsaved and took the other tab's version; "conflict" when it had an
-  // edit of its own waiting, and saving is paused until the user picks.
+  // nothing unsaved and took the other tab's version; "conflict" when it had
+  // edits of its own, and saving is held back until the user picks.
   const [otherTab, setOtherTab] = useState<"adopted" | "conflict" | null>(null);
   const store = built?.store ?? null;
   const savingBlockedBy = built?.savingBlockedBy ?? null;
-  const savingPaused = savingBlockedBy !== null || otherTab === "conflict";
   useEffect(() => {
-    if (store === null || savingPaused) return;
-    let timer: number | null = null;
-    const flush = () => {
-      if (timer === null) return;
-      window.clearTimeout(timer);
-      timer = null;
-      setSaveError(writeSavedBoard(store.getGraph()));
-    };
-    const release = registerPendingSave({
-      pending: () => timer !== null,
-      cancel: () => {
-        if (timer !== null) window.clearTimeout(timer);
-        timer = null;
-      },
+    if (store === null || savingBlockedBy !== null) return;
+    const autosave = createBoardAutosave({
+      write: () => writeSavedBoard(store.getGraph()),
+      report: setSaveError,
+      delayMs: SAVE_DELAY_MS,
     });
-    const unsubscribe = store.subscribeToChanges(() => {
-      if (timer !== null) window.clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        timer = null;
-        setSaveError(writeSavedBoard(store.getGraph()));
-      }, SAVE_DELAY_MS);
-    });
+    const release = registerBoardAutosave(autosave);
+    const unsubscribe = store.subscribeToChanges(() => autosave.changed());
+    const flush = () => autosave.flush();
     const onHide = () => {
       if (document.visibilityState === "hidden") flush();
     };
     document.addEventListener("visibilitychange", onHide);
     window.addEventListener("pagehide", flush);
     return () => {
+      // Writes nothing while a conflict is open, or after a discard.
       flush();
+      autosave.dispose();
       release();
       unsubscribe();
       document.removeEventListener("visibilitychange", onHide);
       window.removeEventListener("pagehide", flush);
     };
-  }, [store, savingPaused]);
+  }, [store, savingBlockedBy]);
 
   // ANOTHER TAB SAVED. Each tab used to hold the board it loaded and write the
   // whole of it back, so a second tab's edit replaced the first tab's without a
   // word (measured: tab A's move was gone after tab B saved). The browser tells
   // every OTHER tab when the save changes (`storage`); this tab then takes the
-  // newer board if it has nothing unsaved of its own, and says so. If it does
-  // have an edit waiting, that write is held back and the user chooses.
+  // newer board if it has nothing unsaved of its own, and says so. If it does,
+  // its writes are held back and the user chooses — and they STAY held back
+  // through any further saves from the other tab until the user has chosen.
+  // (They did not: holding back cleared the only sign of unsaved edits, so the
+  // other tab's next save was adopted over them with the prompt still up.)
   useEffect(() => {
     const onStorage = (event: StorageEvent) => {
       if (event.storageArea !== window.localStorage) return;
       // `key` is null when storage was cleared outright.
       if (event.key !== null && event.key !== BOARD_SAVE_KEY) return;
-      if (hasPendingSave()) {
-        cancelPendingSave();
+      // No autosave running (still loading, or saving blocked by a broken
+      // save): nothing here can be unsaved, so the other tab's board is taken.
+      if (currentBoardAutosave()?.otherTabSaved() === "conflict") {
         setOtherTab("conflict");
         return;
       }
@@ -1486,10 +1483,10 @@ export function Board({
   // back to the sample, every row on.
   useEffect(() => {
     const onReset = () => {
-      // Settings has cleared the save, cancelling a write still in its delay;
-      // cancelled again here so a reset from anywhere cannot be undone by the
-      // old store's cleanup flushing it back.
-      cancelPendingSave();
+      // Settings has cleared the save, discarding edits not yet written;
+      // discarded again here so a reset from anywhere cannot be undone by the
+      // old store's cleanup flushing them back.
+      discardUnsavedBoard();
       setSaveError(null);
       setOtherTab(null);
       setBuilt(fromSample([], false));
@@ -1530,12 +1527,15 @@ export function Board({
       ) : otherTab === "conflict" ? (
         <OtherTabConflictNotice
           onLoadTheirs={() => {
+            // Discarded FIRST, so the old store's cleanup has nothing to flush
+            // over the version the user just chose.
+            discardUnsavedBoard();
             setOtherTab(null);
             setBuilt(fromSaved(readSavedBoard(), []));
           }}
           onKeepMine={() => {
             setOtherTab(null);
-            setSaveError(writeSavedBoard(built.store.getGraph()));
+            currentBoardAutosave()?.keepMine();
           }}
         />
       ) : otherTab === "adopted" ? (
@@ -1558,9 +1558,21 @@ export function Board({
       ) : saveError !== null ? (
         <p
           role="alert"
-          className="mb-3 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300"
+          data-save-error
+          className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-300"
         >
-          Your last change could not be saved ({saveError}). The previous save is kept.
+          <span className="min-w-0 flex-1">
+            Your last change could not be saved ({saveError}). The previous save is kept.
+          </span>
+          {/* The edits are still unsaved, and hiding or leaving the page tries
+              again by itself; this is the way to try without doing either. */}
+          <button
+            type="button"
+            onClick={() => currentBoardAutosave()?.flush()}
+            className="shrink-0 rounded-md border border-red-400/50 px-2 py-1 text-red-100 transition-colors hover:border-red-300 hover:bg-red-500/10"
+          >
+            Try again
+          </button>
         </p>
       ) : null}
       {/* SEALING IS A SUCCESS PATH, so `ok: true` alone would have said nothing.

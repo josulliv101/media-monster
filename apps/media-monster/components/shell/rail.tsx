@@ -136,6 +136,7 @@ export function Rail({
   initialRailExpanded?: boolean;
 }> = {}) {
   const railRef = useRef<HTMLElement>(null);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
   const settingsRef = useRef<HTMLDialogElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const narrow = useSyncExternalStore(subscribeNarrow, readNarrow, () => false);
@@ -211,9 +212,20 @@ export function Rail({
     };
     document.addEventListener("keydown", onKeyDown);
     document.documentElement.classList.add("rail-drawer-open");
+    // FOCUS GOES IN WITH IT, and back to the menu button when it closes. The
+    // closed drawer is `inert` (see the aside), so focus left inside it as it
+    // shuts is dropped on the body — a keyboard user would start again from
+    // the top of the page instead of where they were.
+    railRef.current
+      ?.querySelector<HTMLElement>("a[href], button:not([disabled])")
+      ?.focus();
+    const opener = menuButtonRef.current;
     return () => {
       document.removeEventListener("keydown", onKeyDown);
       document.documentElement.classList.remove("rail-drawer-open");
+      // Not when the window widened instead: the rail is a column again and
+      // the menu button is `md:hidden`, so there is nothing to return to.
+      if (window.matchMedia(NARROW).matches) opener?.focus();
     };
   }, [drawerOpen]);
 
@@ -248,6 +260,14 @@ export function Rail({
         ref={railRef}
         id="rail"
         data-rail-expanded={railExpanded}
+        // THE CLOSED DRAWER IS OUT OF REACH, not merely out of sight. It is
+        // parked off-screen by a transform, and a transform moves nothing out
+        // of the tab order or the accessibility tree: Shift+Tab from "Open
+        // menu" landed on Settings at x = -240..-1 (measured, 390px wide), a
+        // focus ring nobody could see on a control that looked closed. `inert`
+        // takes the whole subtree out of both. Only on a narrow screen: the
+        // column is always on screen, so it is never inert.
+        inert={narrow && !drawerOpen}
         onClickCapture={suppressTipUntilPointerReturns}
         // No horizontal padding and `items-stretch`: the tiles ARE the rail's
         // width, which is what makes them full-width squares. Vertical padding
@@ -400,6 +420,7 @@ export function Rail({
           aria-expanded={drawerOpen}
           aria-controls="rail"
           data-rail-menu
+          ref={menuButtonRef}
           onClick={() => setDrawerOpen(true)}
           className="rounded-md p-2 text-zinc-300 transition-colors hover:bg-zinc-800 hover:text-white focus-visible:outline-2 focus-visible:outline-sky-500"
         >

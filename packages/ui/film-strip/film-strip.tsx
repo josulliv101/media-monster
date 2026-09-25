@@ -1330,11 +1330,20 @@ export function FilmStrip({
       const forward = event.key === "ArrowRight";
       if (event.shiftKey) {
         // SHIFT STEPS A CLIP, plain arrows move a second. The two ways of
-        // asking for the same step must not drift, so this is the same call
-        // tapping a box makes.
+        // asking for the same step must not drift, so this is what a tap does:
+        // select, AND seek. `setSelected` marks the selection as this strip's
+        // own, so the follow effect leaves the playhead alone and trusts the
+        // caller to have put it there — a tap seeks to where it landed, and
+        // this has to seek too. It did not: the highlight stepped and the
+        // playhead stayed at 0, so play started from a clip nobody had
+        // selected. To the clip's START, as a selection from outside lands.
         const at = shots.findIndex((shot) => shot.id === activeId);
         const next = at < 0 ? (forward ? 0 : shots.length - 1) : at + (forward ? 1 : -1);
-        if (next >= 0 && next < shots.length) setSelected(next);
+        const shot = shots[next];
+        if (shot !== undefined) {
+          setSelected(next);
+          setTime(shot.start);
+        }
         return;
       }
       setTime((value) => clamp(value + (forward ? 1 : -1), 0, DUR));

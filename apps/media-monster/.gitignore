@@ -12,6 +12,9 @@
 
 # testing
 /coverage
+# what the browser tests write when one fails (vitest.config.ts)
+/.vitest-attachments/
+__screenshots__/
 
 # next.js
 /.next/
