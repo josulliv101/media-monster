@@ -1,7 +1,8 @@
 name: CI
 
 # The validation gate every PR must pass before auto-merge can complete:
-# typecheck + lint + unit + the Storybook browser suite.
+# typecheck + lint + unit + the Storybook browser suite, for both apps, plus
+# Media Monster's production build.
 #
 # The Storybook `play` functions ARE this repo's interaction test suite, so
 # leaving them out meant interaction and visual contracts could drift while CI
@@ -57,6 +58,15 @@ jobs:
         working-directory: apps/timeline-gstudio001
         run: npx tsc --noEmit
 
+      # MEDIA MONSTER IS AN APP TOO. Every step here named timeline-gstudio001
+      # and nothing else, so a change to media-monster could stop compiling, or
+      # break saving, and still merge green. Its steps sit beside the other
+      # app's rather than in a job of their own so they gate the merge under
+      # the same required check.
+      - name: Typecheck Media Monster
+        working-directory: apps/media-monster
+        run: npm run typecheck
+
       # The app's eslint base path is the app directory, so running its lint
       # against a workspace package answered "File ignored because outside of
       # base path" — a WARNING and exit 0, which reads as a pass. Nothing in
@@ -69,6 +79,10 @@ jobs:
         working-directory: apps/timeline-gstudio001
         run: npm run lint
 
+      - name: Lint Media Monster
+        working-directory: apps/media-monster
+        run: npm run lint
+
       - name: Unit tests (pure logic)
         working-directory: apps/storybook
         run: npx vitest run --project=unit
@@ -76,6 +90,10 @@ jobs:
       - name: App tests (routes, gateway, model)
         working-directory: apps/timeline-gstudio001
         run: npx vitest run
+
+      - name: Media Monster unit tests (saving)
+        working-directory: apps/media-monster
+        run: npx vitest run --project=unit
 
       # Only Chromium — the browser project pins a single chromium instance,
       # so installing the other engines is pure download time.
@@ -85,6 +103,18 @@ jobs:
       - name: Story interaction tests (headless Chromium)
         working-directory: apps/storybook
         run: npx vitest run --project=storybook
+
+      # Focus and `inert` need a real browser; jsdom would pass them regardless.
+      - name: Media Monster browser tests (headless Chromium)
+        working-directory: apps/media-monster
+        run: npx vitest run --project=browser
+
+      # The production build is the only check that runs Next's own compile —
+      # the server/client boundary, route segment config, `"use client"`
+      # exports — none of which `tsc` sees. Media Monster needs no env to build.
+      - name: Build Media Monster
+        working-directory: apps/media-monster
+        run: npm run build
 
   e2e:
     name: E2E (Playwright)

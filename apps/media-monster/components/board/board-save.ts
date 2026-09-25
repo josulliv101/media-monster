@@ -5,6 +5,8 @@ import {
 import { writeInactiveRows } from "@/components/settings/inactive-rows-preference";
 import { engine } from "@/lib/engine/engine";
 
+import type { BoardAutosave } from "./board-autosave";
+
 /**
  * THE BOARD, SAVED IN THIS BROWSER.
  *
@@ -71,33 +73,31 @@ export function writeSavedBoard(graph: Graph): string | null {
 }
 
 /**
- * THE SAVE WAITING TO BE WRITTEN, if any: the board's autosave registers
- * itself here while it runs, so that clearing the save (Reset, Start over) can
- * cancel a write still sitting in its delay first, and a change arriving from
- * another tab can tell whether this one has an edit of its own not yet saved.
+ * THE BOARD'S AUTOSAVE, while one runs: registered here so that clearing the
+ * save (Reset, Start over) can discard edits not yet written first, and a change
+ * arriving from another tab can ask whether this one holds edits of its own.
  *
- * Without the cancel, a Reset inside the delay was undone by the autosave's own
- * cleanup, which flushed the OLD board back into storage straight after it was
- * cleared (measured: the reset board came back on reload).
+ * Without the discard, a Reset inside the save delay was undone by the
+ * autosave's own cleanup, which flushed the OLD board back into storage
+ * straight after it was cleared (measured: the reset board came back on reload).
  */
-type PendingSave = Readonly<{ pending: () => boolean; cancel: () => void }>;
-let pendingSave: PendingSave | null = null;
+let activeAutosave: BoardAutosave | null = null;
 
-export function registerPendingSave(save: PendingSave): () => void {
-  pendingSave = save;
+export function registerBoardAutosave(autosave: BoardAutosave): () => void {
+  activeAutosave = autosave;
   return () => {
-    if (pendingSave === save) pendingSave = null;
+    if (activeAutosave === autosave) activeAutosave = null;
   };
 }
 
-/** Whether this tab has an edit made but not yet written. */
-export function hasPendingSave(): boolean {
-  return pendingSave?.pending() ?? false;
+/** The running autosave, or `null` when none is (loading, or saving blocked). */
+export function currentBoardAutosave(): BoardAutosave | null {
+  return activeAutosave;
 }
 
-/** Drops this tab's unwritten edit without writing it. */
-export function cancelPendingSave(): void {
-  pendingSave?.cancel();
+/** Drops this tab's unsaved edits without writing them. */
+export function discardUnsavedBoard(): void {
+  activeAutosave?.discard();
 }
 
 /**
@@ -109,7 +109,7 @@ export function cancelPendingSave(): void {
  * B-roll's Locations came back off after Reset and reopening B-roll).
  */
 export function clearSavedBoard(): void {
-  cancelPendingSave();
+  discardUnsavedBoard();
   writeInactiveRows([]);
   try {
     window.localStorage.removeItem(KEY);

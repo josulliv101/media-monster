@@ -555,6 +555,87 @@ export const OutsideSelectionMovesThePlayhead: Story = {
   },
 };
 
+/**
+ * SHIFT+ARROW STEPS A CLIP, AND THE PLAYHEAD GOES WITH IT.
+ *
+ * It did not: the step went through the same `setSelected` a tap uses, which
+ * marks the selection as the strip's own so the follow effect leaves the
+ * playhead alone — right for a tap, which seeks to where it landed, and wrong
+ * for a key, which seeked nowhere. The second clip was highlighted while the
+ * playhead's `aria-valuenow` stayed at 0, so play started from the first.
+ *
+ * Both ways the strip can be held: CONTROLLED (the host echoes `onSelect` back
+ * as `selectedId`, as media-monster does) and not. Each walks forward, back,
+ * and into both ends, where a further step changes nothing.
+ */
+function KeyboardStepHarness({ controlled }: Readonly<{ controlled: boolean }>) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const shots = [plain("k0", 4), plain("k1", 6), plain("k2", 3)];
+  return (
+    <div data-check-frame style={{ width: 1000 }}>
+      {controlled ? (
+        <FilmStrip standalone={false} shots={shots} selectedId={selected} onSelect={setSelected} />
+      ) : (
+        <FilmStrip standalone={false} shots={shots} />
+      )}
+    </div>
+  );
+}
+
+async function stepThroughClips(canvasElement: HTMLElement): Promise<void> {
+  const bar = canvasElement.querySelector<HTMLElement>("[data-seam-bar]");
+  const slider = canvasElement.querySelector<HTMLElement>("[data-seam-track]");
+  if (bar === null || slider === null) throw new Error("missing elements");
+  const now = () => Number(slider.getAttribute("aria-valuenow"));
+  const selected = () =>
+    canvasElement.querySelector(".shot.selected")?.getAttribute("data-seam-segment") ?? null;
+  const step = (key: "ArrowLeft" | "ArrowRight") =>
+    bar.dispatchEvent(new KeyboardEvent("keydown", { key, shiftKey: true, bubbles: true }));
+  const expectAt = async (id: string, seconds: number) => {
+    await waitFor(() => expect(selected()).toBe(id));
+    await waitFor(() => expect(now()).toBeCloseTo(seconds, 3));
+  };
+
+  bar.focus();
+  await expect(now()).toBe(0);
+
+  // k0 starts at 0, k1 at 4, k2 at 10.
+  step("ArrowRight");
+  await expectAt("k0", 0);
+  step("ArrowRight");
+  await expectAt("k1", 4);
+  step("ArrowRight");
+  await expectAt("k2", 10);
+
+  // The far end: nothing past k2, so nothing moves.
+  step("ArrowRight");
+  await wait(100);
+  await expectAt("k2", 10);
+
+  step("ArrowLeft");
+  await expectAt("k1", 4);
+  // A playhead moved off the clip's start is put back on it by the next step.
+  bar.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+  await waitFor(() => expect(now()).toBeCloseTo(5, 3));
+  step("ArrowLeft");
+  await expectAt("k0", 0);
+
+  // The near end.
+  step("ArrowLeft");
+  await wait(100);
+  await expectAt("k0", 0);
+}
+
+export const ShiftArrowMovesThePlayheadControlled: Story = {
+  render: () => <KeyboardStepHarness controlled />,
+  play: async ({ canvasElement }) => stepThroughClips(canvasElement),
+};
+
+export const ShiftArrowMovesThePlayheadUncontrolled: Story = {
+  render: () => <KeyboardStepHarness controlled={false} />,
+  play: async ({ canvasElement }) => stepThroughClips(canvasElement),
+};
+
 /* ── opening a shot ────────────────────────────────────────────────────── */
 
 type Opened = { id: string; frame: HTMLElement | null; seconds: number };
