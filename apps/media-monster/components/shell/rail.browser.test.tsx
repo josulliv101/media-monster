@@ -79,6 +79,78 @@ describe("the rail as a drawer (narrow screen)", () => {
     expect(document.activeElement).toBe(settings);
   });
 
+  /**
+   * TAB STAYS IN THE OPEN DRAWER. It walked off the last control onto whatever
+   * followed in the page — here the top bar, in the app the board under the
+   * backdrop — so focus landed on things nobody could see or press.
+   */
+  it("keeps Tab inside the open drawer, wrapping at both ends", async () => {
+    await act(() => userEvent.click(menuButton()));
+    const stops = Array.from(
+      rail().querySelectorAll<HTMLElement>("a[href], button:not([disabled])"),
+    ).filter((element) => element.getClientRects().length > 0);
+    const first = stops[0];
+    const last = stops.at(-1);
+    expect(stops.length).toBeGreaterThan(1);
+    expect(document.activeElement).toBe(first);
+
+    await act(() => userEvent.tab({ shift: true }));
+    expect(document.activeElement).toBe(last);
+    await act(() => userEvent.tab());
+    expect(document.activeElement).toBe(first);
+
+    // Round the whole drawer twice: never out of it.
+    for (let press = 0; press < stops.length * 2; press += 1) {
+      await act(() => userEvent.tab());
+      expect(focusIsInRail()).toBe(true);
+    }
+    for (let press = 0; press < stops.length * 2; press += 1) {
+      await act(() => userEvent.tab({ shift: true }));
+      expect(focusIsInRail()).toBe(true);
+    }
+  });
+
+  it("brings focus found outside the open drawer back in on the next Tab", async () => {
+    await act(() => userEvent.click(menuButton()));
+    menuButton().focus();
+    expect(focusIsInRail()).toBe(false);
+    await act(() => userEvent.tab());
+    expect(focusIsInRail()).toBe(true);
+  });
+
+  // Settings opens from inside the drawer as a native modal `<dialog>`, which
+  // makes the drawer inert behind it. A trap that still claimed Tab there would
+  // cancel every press and pin focus to one control of the dialog.
+  it("leaves Tab alone inside Settings opened from the drawer", async () => {
+    await act(() => userEvent.click(menuButton()));
+    const settings = rail().querySelector<HTMLButtonElement>("[data-rail-settings]");
+    if (settings === null) throw new Error("no settings button");
+    await act(() => userEvent.click(settings));
+    const dialog = document.querySelector<HTMLDialogElement>("dialog[open]");
+    if (dialog === null) throw new Error("settings did not open");
+    const inDialog = () => dialog.contains(document.activeElement);
+    expect(inDialog()).toBe(true);
+    const visited = new Set<Element | null>([document.activeElement]);
+    for (let press = 0; press < 3; press += 1) {
+      await act(() => userEvent.tab());
+      expect(inDialog()).toBe(true);
+      visited.add(document.activeElement);
+    }
+    expect(visited.size).toBeGreaterThan(1);
+    await act(async () => dialog.close());
+  });
+
+  it("is a modal dialog while open, and a plain aside while closed", async () => {
+    expect(rail().getAttribute("role")).toBeNull();
+    expect(rail().getAttribute("aria-modal")).toBeNull();
+    await act(() => userEvent.click(menuButton()));
+    expect(rail().getAttribute("role")).toBe("dialog");
+    expect(rail().getAttribute("aria-modal")).toBe("true");
+    expect(rail().getAttribute("aria-label")).toBe("Menu");
+    await act(() => userEvent.keyboard("{Escape}"));
+    expect(rail().getAttribute("role")).toBeNull();
+  });
+
   it("gives focus back to the menu button when Escape closes it", async () => {
     await act(() => userEvent.click(menuButton()));
     expect(focusIsInRail()).toBe(true);
@@ -103,8 +175,9 @@ describe("the rail as a column (wide screen)", () => {
     await mountRail();
   });
 
-  it("is never inert: the column is always on screen", async () => {
+  it("is never inert, never a dialog: the column is always on screen", async () => {
     expect(rail().inert).toBe(false);
+    expect(rail().getAttribute("role")).toBeNull();
     const settings = rail().querySelector<HTMLButtonElement>("[data-rail-settings]");
     settings?.focus();
     expect(document.activeElement).toBe(settings);

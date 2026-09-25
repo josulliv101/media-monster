@@ -82,6 +82,19 @@ function readNarrow(): boolean {
 }
 
 /**
+ * The controls in `root` a Tab can land on, in order. Anything without a box is
+ * left out: the width toggle is `max-md:hidden` in the drawer, and a trap that
+ * wrapped to it would send focus nowhere.
+ */
+function tabStops(root: HTMLElement): HTMLElement[] {
+  return Array.from(
+    root.querySelectorAll<HTMLElement>(
+      "a[href], button:not([disabled]), [tabindex]:not([tabindex='-1'])",
+    ),
+  ).filter((element) => element.getClientRects().length > 0);
+}
+
+/**
  * After a POINTER press on a rail tile, keep that tile's tooltip shut until the
  * pointer LEAVES AND COMES BACK.
  *
@@ -205,10 +218,43 @@ export function Rail({
   // a media query whatever JavaScript believes, so a window widened while the
   // drawer is open cannot leave the page unscrollable behind a rail that is a
   // column again — the one failure here that would strand somebody.
+  //
+  // TAB STAYS IN THE OPEN DRAWER. It covers the board, and the backdrop takes
+  // every tap behind it, but Tab walked straight off its last control onto the
+  // board underneath — focus on cards nobody could see or press. So Tab from
+  // the last control wraps to the first and Shift+Tab from the first to the
+  // last, the way a modal dialog behaves; focus found outside (a click on the
+  // backdrop's edge, a stray programmatic focus) is brought back in. Settings,
+  // opened from inside the drawer, is a native modal `<dialog>` with its own
+  // containment, so a Tab inside it is left alone.
   useEffect(() => {
     if (!drawerOpen) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setDrawerOpen(false);
+      if (event.key === "Escape") {
+        setDrawerOpen(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const drawer = railRef.current;
+      if (drawer === null) return;
+      if (event.target instanceof Element && event.target.closest("dialog[open]") !== null) {
+        return;
+      }
+      const stops = tabStops(drawer);
+      const first = stops[0];
+      const last = stops.at(-1);
+      if (first === undefined || last === undefined) return;
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement) || !drawer.contains(active)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first).focus();
+      } else if (event.shiftKey && active === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && active === last) {
+        event.preventDefault();
+        first.focus();
+      }
     };
     document.addEventListener("keydown", onKeyDown);
     document.documentElement.classList.add("rail-drawer-open");
@@ -268,6 +314,12 @@ export function Rail({
         // takes the whole subtree out of both. Only on a narrow screen: the
         // column is always on screen, so it is never inert.
         inert={narrow && !drawerOpen}
+        // OPEN, it is a modal: the same containment the Tab trap gives the
+        // keyboard, told to assistive technology, which otherwise reads on
+        // into the board behind it. A column, it stays a plain `aside`.
+        role={narrow && drawerOpen ? "dialog" : undefined}
+        aria-modal={narrow && drawerOpen ? true : undefined}
+        aria-label={narrow && drawerOpen ? "Menu" : undefined}
         onClickCapture={suppressTipUntilPointerReturns}
         // No horizontal padding and `items-stretch`: the tiles ARE the rail's
         // width, which is what makes them full-width squares. Vertical padding
