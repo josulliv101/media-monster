@@ -41,7 +41,8 @@ export type BoardAutosave = Readonly<{
   otherTabSaved: () => OtherTabVerdict;
   /** Resolve a conflict by writing this tab's version over the other one. */
   keepMine: () => void;
-  /** Forget this tab's unsaved edits without writing them. */
+  /** Forget this tab's unsaved edits without writing them, and any error about
+   *  them. */
   discard: () => void;
   /** Stop the timer for good; nothing is written. */
   dispose: () => void;
@@ -54,7 +55,8 @@ export function createBoardAutosave({
 }: Readonly<{
   /** Writes the board, returning why it could not, or `null` when it did. */
   write: () => string | null;
-  /** Hears every write's outcome, so the board can show or clear the error. */
+  /** Hears every write's outcome, so the board can show or clear the error;
+   *  hears `null` on a discard too. */
   report: (error: string | null) => void;
   delayMs: number;
 }>): BoardAutosave {
@@ -102,6 +104,10 @@ export function createBoardAutosave({
       stopTimer();
       unsaved = false;
       conflict = false;
+      // A failed write's error was about the edits just dropped. Left up, it
+      // sat over the board that replaced them, with a "Try again" that had
+      // nothing to write and so could never clear it.
+      report(null);
     },
     dispose: stopTimer,
   };

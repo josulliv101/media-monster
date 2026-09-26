@@ -140,6 +140,27 @@ describe("the rail as a drawer (narrow screen)", () => {
     await act(async () => dialog.close());
   });
 
+  // ESCAPE CLOSES ONE LAYER. Settings handles its own Escape and marks it
+  // handled; the drawer's listener, on `document`, heard the same key after
+  // it and shut too, so one press dropped a keyboard user out of both.
+  it("closes only Settings on Escape, leaving the drawer open around it", async () => {
+    await act(() => userEvent.click(menuButton()));
+    const settings = rail().querySelector<HTMLButtonElement>("[data-rail-settings]");
+    if (settings === null) throw new Error("no settings button");
+    await act(() => userEvent.click(settings));
+    const dialog = document.querySelector<HTMLDialogElement>("dialog[open]");
+    if (dialog === null) throw new Error("settings did not open");
+    await act(() => userEvent.keyboard("{Escape}"));
+    expect(dialog.open).toBe(false);
+    expect(rail().inert).toBe(false);
+    expect(rail().getAttribute("role")).toBe("dialog");
+    expect(document.activeElement).toBe(settings);
+    // A second Escape, from the drawer itself, is the one that closes it.
+    await act(() => userEvent.keyboard("{Escape}"));
+    expect(rail().inert).toBe(true);
+    expect(document.activeElement).toBe(menuButton());
+  });
+
   it("is a modal dialog while open, and a plain aside while closed", async () => {
     expect(rail().getAttribute("role")).toBeNull();
     expect(rail().getAttribute("aria-modal")).toBeNull();

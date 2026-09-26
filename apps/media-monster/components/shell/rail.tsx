@@ -227,11 +227,17 @@ export function Rail({
   // backdrop's edge, a stray programmatic focus) is brought back in. Settings,
   // opened from inside the drawer, is a native modal `<dialog>` with its own
   // containment, so a Tab inside it is left alone.
+  //
+  // ESCAPE CLOSES ONE LAYER. Settings closes itself on Escape and marks the key
+  // handled (`preventDefault`); this listener, on `document`, hears the same
+  // key after it, and shut the drawer too — one press dropped a keyboard user
+  // out of both. A key already handled is left alone. Not a `dialog[open]`
+  // check like Tab's below: Settings has closed by the time the key gets here.
   useEffect(() => {
     if (!drawerOpen) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        setDrawerOpen(false);
+        if (!event.defaultPrevented) setDrawerOpen(false);
         return;
       }
       if (event.key !== "Tab") return;
