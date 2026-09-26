@@ -165,6 +165,19 @@ describe("board autosave", () => {
       // Still unsaved, so the next save from the other tab asks again.
       expect(autosave.otherTabSaved()).toBe("conflict");
     });
+
+    // The error is about edits that are gone once discarded. "Load the other
+    // tab's" left it up (measured: the red notice back over the other tab's
+    // board, and "Try again" unable to clear it, with nothing left to write).
+    it("is cleared when the edits it was about are discarded", () => {
+      const { state, autosave, edit } = harness();
+      state.failing = true;
+      edit("mine");
+      vi.advanceTimersByTime(DELAY);
+      autosave.otherTabSaved();
+      autosave.discard();
+      expect(state.errors).toEqual(["this browser's storage is full or blocked", null]);
+    });
   });
 
   describe("discarding (Reset, Start over)", () => {
